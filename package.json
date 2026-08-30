@@ -1,0 +1,26 @@
+{
+  "name": "abproxy",
+  "version": "1.0.0",
+  "description": "Local LLM gateway/proxy — one endpoint, many providers, automatic failover",
+  "type": "module",
+  "bin": {
+    "abproxy": "./bin/abproxy.js"
+  },
+  "scripts": {
+    "start": "node bin/abproxy.js start --foreground",
+    "dev": "node --watch bin/abproxy.js start --foreground"
+  },
+  "keywords": ["llm", "proxy", "gateway", "openai", "anthropic", "failover"],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^13.1.0",
+    "chalk": "^5.4.1",
+    "gradient-string": "^3.0.0",
+    "cli-table3": "^0.6.5",
+    "ora": "^8.2.0",
+    "@inquirer/prompts": "^8.6.0",
+    "express": "^5.1.0",
+    "chokidar": "^4.0.3",
+    "uuid": "^11.1.0"
+  }
+}
