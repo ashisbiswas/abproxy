@@ -42,8 +42,6 @@ export function registerProviderCommands(program) {
         });
         const baseURL = await input({ message: 'Base URL:' });
         const apiKey = await input({ message: 'API key:' });
-        const aliasStr = await input({ message: 'Aliases (comma-separated, or blank):' });
-        const aliases = aliasStr ? aliasStr.split(',').map(a => a.trim()).filter(Boolean) : [];
 
         // Dual-protocol detection (seekai.cc, gorouter.app, etc.)
         let protocols;
@@ -57,7 +55,7 @@ export function registerProviderCommands(program) {
           protocols = hasAnthropic ? ['openai', 'anthropic'] : ['openai'];
         }
 
-        const providerData = { type, baseURL, apiKey, aliases, models: {}, autoFetch: true, protocols };
+        const providerData = { type, baseURL, apiKey, models: {}, autoFetch: true, protocols };
 
         // ── Try to auto-fetch models from the provider ──────────
         const spinner = ora('Fetching available models from provider...').start();
@@ -81,7 +79,7 @@ export function registerProviderCommands(program) {
           });
 
           for (const id of selectedIds) {
-            providerData.models[id] = { realModel: id, aliases: [] };
+            providerData.models[id] = { realModel: id };
           }
 
           if (selectedIds.length > 0) {
@@ -93,12 +91,10 @@ export function registerProviderCommands(program) {
           // Fallback: manual model entry
           let addMore = await confirm({ message: 'Add a model manually?', default: true });
           while (addMore) {
-            const modelName = await input({ message: '  Model name (your alias, e.g. "opus-5"):' });
+            const modelName = await input({ message: '  Model name (your internal name):' });
             const realModel = await input({ message: '  Real model name (API model ID):' });
-            const modelAliasStr = await input({ message: '  Model aliases (comma-separated, or blank):' });
-            const modelAliases = modelAliasStr ? modelAliasStr.split(',').map(a => a.trim()).filter(Boolean) : [];
 
-            providerData.models[modelName] = { realModel, aliases: modelAliases };
+            providerData.models[modelName] = { realModel };
             addMore = await confirm({ message: 'Add another model?', default: false });
           }
         }
@@ -131,7 +127,6 @@ export function registerProviderCommands(program) {
           chalk.cyan('Type'),
           chalk.cyan('Base URL'),
           chalk.cyan('Protocols'),
-          chalk.cyan('Aliases'),
           chalk.cyan('Models'),
           chalk.cyan('Accounts'),
           chalk.cyan('Active Account'),
@@ -150,7 +145,6 @@ export function registerProviderCommands(program) {
           p.type === 'anthropic-native' ? chalk.magenta(p.type) : chalk.blue(p.type),
           chalk.gray(p.baseURL),
           chalk.yellow(supported.join(' + ')),
-          (p.aliases || []).join(', ') || chalk.gray('—'),
           chalk.yellow(modelCount.toString()),
           chalk.yellow(accountCount.toString()),
           accountCount > 0 ? chalk.green(getActiveAccountName(p)) : chalk.gray('—'),
@@ -187,11 +181,6 @@ export function registerProviderCommands(program) {
           message: `API key (account "${getActiveAccountName(existing)}"):`,
           default: getActiveApiKey(existing),
         });
-        const aliasStr = await input({
-          message: 'Aliases (comma-separated):',
-          default: (existing.aliases || []).join(', '),
-        });
-        const aliases = aliasStr ? aliasStr.split(',').map(a => a.trim()).filter(Boolean) : [];
 
         // Protocols (dual-protocol support)
         const currentProtocols = Array.isArray(existing.protocols)
@@ -209,7 +198,7 @@ export function registerProviderCommands(program) {
         });
 
         editProvider(resolvedName, {
-          type, baseURL, aliases,
+          type, baseURL,
           ...(protocols === 'both'
             ? { protocols: ['openai', 'anthropic'] }
             : { protocols: [protocols] }),
@@ -240,7 +229,7 @@ export function registerProviderCommands(program) {
         }
 
         const yes = await confirm({
-          message: `Delete provider "${resolvedName}" and all its models? This cannot be undone.`,
+          message: `Delete provider "${resolvedName}" and all its models/accounts? Aliases pointing at it will be removed. This cannot be undone.`,
           default: false,
         });
         if (!yes) {

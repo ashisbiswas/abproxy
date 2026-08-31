@@ -21,13 +21,12 @@ import {
   formatDefaultModel,
   addModel,
   deleteModel,
-  addModelAlias,
   setDefaultModel,
   listModels,
-  addGroup,
-  editGroup,
-  deleteGroup,
-  listGroups,
+  addAlias,
+  editAlias,
+  deleteAlias,
+  listAliases,
   getConfig,
   saveConfig,
   resolveProviderName,
@@ -115,13 +114,6 @@ async function pickModelOfProvider(providerName, message = 'Select model:') {
 }
 
 /**
- * Parse a comma-separated list into a trimmed array.
- */
-function parseList(str) {
-  return str ? str.split(',').map(s => s.trim()).filter(Boolean) : [];
-}
-
-/**
  * Run a handler and swallow prompt-cancellation errors so the REPL survives.
  */
 async function guard(fn) {
@@ -142,7 +134,7 @@ async function guard(fn) {
 export const commands = [
   { name: '/providers', desc: 'Manage providers (list/add/edit/delete/test/sync/accounts)', handler: showProviderMenu },
   { name: '/models',    desc: 'Manage models (list/add/delete/alias/default/test)',         handler: showModelMenu },
-  { name: '/groups',    desc: 'Manage model groups (list/add/edit/delete)',                 handler: showGroupMenu },
+  { name: '/aliases',   desc: 'Manage aliases — the model names agents see',               handler: showAliasMenu },
   { name: '/setup',     desc: 'Configure an agent (claude-code|opencode|codex)',            handler: cmdSetup },
   { name: '/status',    desc: 'Server state and health',                                    handler: cmdStatus },
   { name: '/config',    desc: 'Show config file path and local API key',                    handler: cmdConfig },
@@ -184,7 +176,7 @@ export async function showMainMenu() {
         choices: [
           { name: `${chalk.cyan('Providers'.padEnd(12))} ${chalk.gray('Add, edit, test providers & accounts')}`, value: 'providers' },
           { name: `${chalk.cyan('Models'.padEnd(12))} ${chalk.gray('Add, delete, alias, test models')}`,        value: 'models' },
-          { name: `${chalk.cyan('Groups'.padEnd(12))} ${chalk.gray('Model groups for failover')}`,              value: 'groups' },
+          { name: `${chalk.cyan('Aliases'.padEnd(12))} ${chalk.gray('The model names agents see at /v1/models')}`, value: 'aliases' },
           { name: `${chalk.cyan('Setup'.padEnd(12))} ${chalk.gray('Configure Claude Code / opencode / codex')}`, value: 'setup' },
           { name: `${chalk.cyan('Config'.padEnd(12))} ${chalk.gray('Config path and local API key')}`,          value: 'config' },
           { name: `${chalk.cyan('Help'.padEnd(12))} ${chalk.gray('Full command reference')}`,                   value: 'help' },
@@ -203,7 +195,7 @@ export async function showMainMenu() {
     switch (choice) {
       case 'providers': await showProviderMenu(); break;
       case 'models':    await showModelMenu(); break;
-      case 'groups':    await showGroupMenu(); break;
+      case 'aliases':   await showAliasMenu(); break;
       case 'setup':     await cmdSetup(''); break;
       case 'config':    await cmdConfig(); break;
       case 'help':      cmdHelp(); break;
@@ -232,7 +224,7 @@ export async function showProviderMenu() {
         choices: [
           { name: `${chalk.cyan('List Providers'.padEnd(20))} ${chalk.gray('Show providers table')}`,       value: 'list' },
           { name: `${chalk.cyan('Add Provider'.padEnd(20))} ${chalk.gray('Interactive setup + accounts')}`, value: 'add' },
-          { name: `${chalk.cyan('Edit Provider'.padEnd(20))} ${chalk.gray('Type, base URL, aliases')}`,     value: 'edit' },
+          { name: `${chalk.cyan('Edit Provider'.padEnd(20))} ${chalk.gray('Type, base URL, protocols')}`,     value: 'edit' },
           { name: `${chalk.cyan('Delete Provider'.padEnd(20))} ${chalk.gray('Remove provider + models')}`,  value: 'delete' },
           { name: `${chalk.cyan('Test Provider'.padEnd(20))} ${chalk.gray('Live ping test')}`,              value: 'test' },
           { name: `${chalk.cyan('Sync Models'.padEnd(20))} ${chalk.gray('Fetch models from upstream')}`,    value: 'sync' },
@@ -279,7 +271,6 @@ async function cmdProviderList() {
       chalk.cyan('Type'),
       chalk.cyan('Base URL'),
       chalk.cyan('Protocols'),
-      chalk.cyan('Aliases'),
       chalk.cyan('Models'),
       chalk.cyan('Accounts'),
       chalk.cyan('Active Account'),
@@ -299,7 +290,6 @@ async function cmdProviderList() {
       p.type === 'anthropic-native' ? chalk.magenta(p.type) : chalk.blue(p.type),
       chalk.gray(p.baseURL),
       chalk.yellow(supported.join(' + ')),
-      (p.aliases || []).join(', ') || chalk.gray('—'),
       chalk.yellow(Object.keys(p.models || {}).length.toString()),
       chalk.yellow(accountCount.toString()),
       accountCount > 0 ? chalk.green(getActiveAccountName(p)) : chalk.gray('—'),
@@ -374,8 +364,7 @@ async function cmdProviderAdd() {
       for (const a of accounts) a.isDefault = a.name === defaultName;
     }
 
-    const aliases = parseList(await input({ message: 'Aliases (comma-separated, or blank):' }));
-    const providerData = { type, baseURL, aliases, accounts, models: {}, autoFetch: true, protocols };
+    const providerData = { type, baseURL, accounts, models: {}, autoFetch: true, protocols };
 
     // ── Auto-fetch models using the default account's key ────────
     const spinner = ora('Fetching available models from provider...').start();
@@ -393,7 +382,7 @@ async function cmdProviderAdd() {
         pageSize: 20,
       });
       for (const id of selectedIds) {
-        providerData.models[id] = { realModel: id, aliases: [] };
+        providerData.models[id] = { realModel: id };
       }
       if (selectedIds.length > 0) {
         console.log(chalk.gray(`  Imported ${selectedIds.length} model(s)`));
@@ -404,8 +393,7 @@ async function cmdProviderAdd() {
       while (addMore) {
         const modelName = await input({ message: '  Model name:' });
         const realModel = await input({ message: '  Real model name:' });
-        const mAliases = parseList(await input({ message: '  Model aliases (or blank):' }));
-        providerData.models[modelName] = { realModel, aliases: mAliases };
+        providerData.models[modelName] = { realModel };
         addMore = await confirm({ message: 'Add another model?', default: false });
       }
     }
@@ -439,10 +427,6 @@ async function cmdProviderEdit() {
       ],
     });
     const baseURL = await input({ message: 'Base URL:', default: existing.baseURL });
-    const aliases = parseList(await input({
-      message: 'Aliases:',
-      default: (existing.aliases || []).join(', '),
-    }));
 
     // Protocols (dual-protocol support)
     const currentProtocols = Array.isArray(existing.protocols)
@@ -460,7 +444,7 @@ async function cmdProviderEdit() {
     });
 
     editProvider(resolved, {
-      type, baseURL, aliases,
+      type, baseURL,
       ...(protocols === 'both'
         ? { protocols: ['openai', 'anthropic'] }
         : { protocols: [protocols] }),
@@ -800,13 +784,12 @@ export async function showModelMenu() {
           { name: `${chalk.cyan('List Models'.padEnd(20))} ${chalk.gray('Show models table')}`,               value: 'list' },
           { name: `${chalk.cyan('Add Model'.padEnd(20))} ${chalk.gray('Add a model to a provider')}`,         value: 'add' },
           { name: `${chalk.cyan('Delete Model'.padEnd(20))} ${chalk.gray('Pick provider → model → confirm')}`, value: 'delete' },
-          { name: `${chalk.cyan('Add Alias'.padEnd(20))} ${chalk.gray('Add an alias to a model')}`,           value: 'alias' },
           { name: `${chalk.cyan('Set Default Model'.padEnd(20))} ${chalk.gray('Global fallback default')}`,   value: 'default' },
           { name: `${chalk.cyan('Test Model'.padEnd(20))} ${chalk.gray('Live completion test')}`,             value: 'test' },
           backChoice,
         ],
         loop: false,
-        pageSize: 7,
+        pageSize: 6,
       });
     } catch (err) {
       if (err.name === 'ExitPromptError') return;
@@ -818,7 +801,6 @@ export async function showModelMenu() {
       case 'list':    await cmdModelList(); break;
       case 'add':     await cmdModelAdd(); break;
       case 'delete':  await cmdModelDelete(); break;
-      case 'alias':   await cmdModelAlias(); break;
       case 'default': await cmdModelDefault(); break;
       case 'test':    await cmdModelTest(); break;
       default: return; // Back → main menu
@@ -830,7 +812,7 @@ async function cmdModelList(args) {
   const models = listModels(args || null);
   if (models.length === 0) { console.log(chalk.yellow('\n  No models configured.\n')); return; }
   const table = new Table({
-    head: [chalk.cyan('Model'), chalk.cyan('Provider'), chalk.cyan('Real Model'), chalk.cyan('Aliases'), chalk.cyan('Default')],
+    head: [chalk.cyan('Model'), chalk.cyan('Provider'), chalk.cyan('Real Model'), chalk.cyan('Default')],
     style: { head: [], border: ['gray'] },
   });
   for (const m of models) {
@@ -842,11 +824,11 @@ async function cmdModelList(args) {
       chalk.white.bold(m.name),
       chalk.gray(m.provider),
       chalk.blue(m.realModel),
-      m.aliases.length > 0 ? m.aliases.join(', ') : chalk.gray('—'),
       flags || chalk.gray('—'),
     ]);
   }
   console.log('\n' + table.toString() + '\n');
+  console.log(chalk.gray('  These are internal names. Agents only see aliases (main menu → Aliases) and "default".\n'));
 }
 
 async function cmdModelAdd() {
@@ -857,10 +839,10 @@ async function cmdModelAdd() {
     const modelName = await input({ message: 'Model name:' });
     if (!modelName.trim()) { console.log(chalk.gray('  Cancelled — name is required.')); return; }
     const realModel = await input({ message: 'Real model name (upstream API ID):', default: modelName });
-    const aliases = parseList(await input({ message: 'Aliases (or blank):' }));
 
-    addModel(providerName, modelName, { realModel, aliases });
-    console.log(chalk.green(`\n  ✔ Model "${modelName}" added to "${providerName}"\n`));
+    addModel(providerName, modelName, { realModel });
+    console.log(chalk.green(`\n  ✔ Model "${modelName}" added to "${providerName}"`));
+    console.log(chalk.gray('  Create an alias (main menu → Aliases) to expose it to agents.\n'));
   });
 }
 
@@ -881,30 +863,6 @@ async function cmdModelDelete() {
 
     deleteModel(providerName, modelName);
     console.log(chalk.green(`\n  ✔ Model "${modelName}" deleted from "${providerName}"\n`));
-  });
-}
-
-async function cmdModelAlias() {
-  return guard(async () => {
-    const models = listModels();
-    if (models.length === 0) { console.log(chalk.yellow('  No models.')); return; }
-
-    const modelName = await select({
-      message: 'Model:',
-      choices: [
-        ...models.map(m => ({ name: `${m.name} ${chalk.gray(`(${m.provider})`)}`, value: m.name })),
-        backChoice,
-      ],
-      loop: false,
-      pageSize: 20,
-    });
-    if (modelName === BACK) return;
-
-    const alias = await input({ message: 'New alias:' });
-    if (!alias.trim()) { console.log(chalk.gray('  Cancelled — alias is required.')); return; }
-
-    addModelAlias(modelName, alias);
-    console.log(chalk.green(`\n  ✔ Alias "${alias}" added to "${modelName}"\n`));
   });
 }
 
@@ -973,22 +931,23 @@ async function cmdModelTest() {
 }
 
 
-// ─── Group Menu ──────────────────────────────────────────────────────
+// ─── Alias Menu ──────────────────────────────────────────────────────
 
 /**
- * Group sub-menu. Loops until Back, which returns to the main menu.
+ * Alias sub-menu. Aliases are the ONLY model names agents see at
+ * /v1/models (plus the literal "default"). Loops until Back.
  */
-export async function showGroupMenu() {
+export async function showAliasMenu() {
   while (true) {
     let choice;
     try {
       choice = await select({
-        message: 'Model groups:',
+        message: 'Aliases (model names for agents):',
         choices: [
-          { name: `${chalk.cyan('List Groups'.padEnd(16))} ${chalk.gray('Show groups table')}`,             value: 'list' },
-          { name: `${chalk.cyan('Add Group'.padEnd(16))} ${chalk.gray('Create a failover group')}`,         value: 'add' },
-          { name: `${chalk.cyan('Edit Group'.padEnd(16))} ${chalk.gray('Change members or strategy')}`,     value: 'edit' },
-          { name: `${chalk.cyan('Delete Group'.padEnd(16))} ${chalk.gray('Remove a group')}`,               value: 'delete' },
+          { name: `${chalk.cyan('List Aliases'.padEnd(18))} ${chalk.gray('Show aliases table')}`,              value: 'list' },
+          { name: `${chalk.cyan('Add Alias'.padEnd(18))} ${chalk.gray('provider/model-name → agent-visible')}`, value: 'add' },
+          { name: `${chalk.cyan('Edit Alias'.padEnd(18))} ${chalk.gray('Rename or re-point an alias')}`,       value: 'edit' },
+          { name: `${chalk.cyan('Delete Alias'.padEnd(18))} ${chalk.gray('Remove an alias')}`,                value: 'delete' },
           backChoice,
         ],
         loop: false,
@@ -1001,126 +960,110 @@ export async function showGroupMenu() {
     }
 
     switch (choice) {
-      case 'list':   await cmdGroupList(); break;
-      case 'add':    await cmdGroupAdd(); break;
-      case 'edit':   await cmdGroupEdit(); break;
-      case 'delete': await cmdGroupDelete(); break;
+      case 'list':   await cmdAliasList(); break;
+      case 'add':    await cmdAliasAdd(); break;
+      case 'edit':   await cmdAliasEdit(); break;
+      case 'delete': await cmdAliasDelete(); break;
       default: return; // Back → main menu
     }
   }
 }
 
-async function cmdGroupList() {
-  const groups = listGroups();
-  const entries = Object.entries(groups);
-  if (entries.length === 0) { console.log(chalk.yellow('\n  No groups configured.\n')); return; }
+async function cmdAliasList() {
+  const aliases = listAliases();
+  const entries = Object.entries(aliases);
+  if (entries.length === 0) {
+    console.log(chalk.yellow('\n  No aliases configured. Agents see only "default" until you add some.\n'));
+    return;
+  }
   const table = new Table({
-    head: [chalk.cyan('Group'), chalk.cyan('Members'), chalk.cyan('Strategy'), chalk.cyan('Default')],
+    head: [chalk.cyan('Alias (agent-visible)'), chalk.cyan('Provider'), chalk.cyan('Model'), chalk.cyan('Real Model')],
     style: { head: [], border: ['gray'] },
   });
-  for (const [name, g] of entries) {
+  for (const [name, a] of entries) {
+    const model = listModels(a.provider).find(m => m.name === a.model);
     table.push([
       chalk.white.bold(name),
-      g.members.map(m => chalk.gray(m)).join('\n'),
-      g.strategy === 'failover' ? chalk.yellow(g.strategy) : chalk.blue(g.strategy),
-      g.default ? chalk.green('★') : chalk.gray('—'),
+      chalk.gray(a.provider),
+      chalk.blue(a.model),
+      model ? chalk.gray(model.realModel) : chalk.red('(missing)'),
     ]);
   }
   console.log('\n' + table.toString() + '\n');
+  console.log(chalk.gray('  Plus the literal "default" → default provider\'s default model.\n'));
 }
 
-async function cmdGroupAdd() {
+async function cmdAliasAdd() {
   return guard(async () => {
-    const name = await input({ message: 'Group name:' });
-    if (!name.trim()) { console.log(chalk.gray('  Cancelled — name is required.')); return; }
-
     const models = listModels();
-    if (models.length === 0) { console.log(chalk.yellow('  No models.')); return; }
+    if (models.length === 0) {
+      console.log(chalk.yellow('\n  No models configured. Add a provider with models first.\n'));
+      return;
+    }
 
-    const members = await checkbox({
-      message: 'Select members (order = failover order):',
-      choices: models.map(m => ({
-        name: `${m.provider}:${m.name} ${chalk.gray(`(→ ${m.realModel})`)}`,
-        value: `${m.provider}:${m.name}`,
-      })),
-      pageSize: 20,
+    // Pick provider → model, then default the alias name to provider/model
+    const providerName = await pickProvider('Alias points at provider:');
+    if (providerName === BACK) return;
+
+    const modelName = await pickModelOfProvider(providerName, 'Alias points at model:');
+    if (modelName === BACK) return;
+
+    const suggested = `${providerName}/${modelName}`;
+    const aliasName = await input({
+      message: 'Alias name (what agents will see):',
+      default: suggested,
     });
-    if (members.length === 0) { console.log(chalk.gray('  No members selected.')); return; }
+    if (!aliasName.trim()) { console.log(chalk.gray('  Cancelled — name is required.')); return; }
 
-    const strategy = await select({
-      message: 'Strategy:',
-      choices: [
-        { name: 'Failover', value: 'failover' },
-        { name: 'Round-robin', value: 'round-robin' },
-      ],
-    });
-
-    addGroup(name, { members, strategy });
-    console.log(chalk.green(`\n  ✔ Group "${name}" created with ${members.length} member(s)\n`));
+    addAlias(aliasName, { provider: providerName, model: modelName });
+    console.log(chalk.green(`\n  ✔ Alias "${aliasName}" → ${providerName}:${modelName}`));
+    console.log(chalk.gray('  It now appears in /v1/models and is usable as a model name.\n'));
   });
 }
 
-async function cmdGroupEdit() {
+async function cmdAliasEdit() {
   return guard(async () => {
-    const groups = Object.keys(listGroups());
-    if (groups.length === 0) { console.log(chalk.yellow('\n  No groups configured.\n')); return; }
+    const aliases = Object.keys(listAliases());
+    if (aliases.length === 0) { console.log(chalk.yellow('\n  No aliases configured.\n')); return; }
 
-    const name = await select({
-      message: 'Select group to edit:',
-      choices: [...groups.map(g => ({ name: g, value: g })), backChoice],
+    const aliasName = await select({
+      message: 'Select alias to edit:',
+      choices: [...aliases.map(a => ({ name: a, value: a })), backChoice],
       loop: false,
     });
-    if (name === BACK) return;
+    if (aliasName === BACK) return;
 
-    const existing = listGroups()[name];
-    const models = listModels();
-    if (models.length === 0) { console.log(chalk.yellow('  No models.')); return; }
+    const existing = listAliases()[aliasName];
+    const newName = await input({ message: 'Alias name:', default: aliasName });
 
-    const members = await checkbox({
-      message: 'Select members:',
-      choices: models.map(m => {
-        const ref = `${m.provider}:${m.name}`;
-        return {
-          name: `${ref} ${chalk.gray(`(→ ${m.realModel})`)}`,
-          value: ref,
-          checked: existing.members.includes(ref),
-        };
-      }),
-      pageSize: 20,
-    });
-    if (members.length === 0) { console.log(chalk.gray('  A group needs at least one member — cancelled.')); return; }
+    const providerName = await pickProvider('Alias points at provider:');
+    if (providerName === BACK) return;
 
-    const strategy = await select({
-      message: 'Strategy:',
-      default: existing.strategy,
-      choices: [
-        { name: 'Failover', value: 'failover' },
-        { name: 'Round-robin', value: 'round-robin' },
-      ],
-    });
+    const modelName = await pickModelOfProvider(providerName, 'Alias points at model:');
+    if (modelName === BACK) return;
 
-    editGroup(name, { members, strategy });
-    console.log(chalk.green(`\n  ✔ Group "${name}" updated (${members.length} member(s))\n`));
+    editAlias(aliasName, { name: newName, provider: providerName, model: modelName });
+    console.log(chalk.green(`\n  ✔ Alias "${newName}" → ${providerName}:${modelName}\n`));
   });
 }
 
-async function cmdGroupDelete() {
+async function cmdAliasDelete() {
   return guard(async () => {
-    const groups = Object.keys(listGroups());
-    if (groups.length === 0) { console.log(chalk.yellow('\n  No groups configured.\n')); return; }
+    const aliases = Object.keys(listAliases());
+    if (aliases.length === 0) { console.log(chalk.yellow('\n  No aliases configured.\n')); return; }
 
-    const name = await select({
-      message: 'Select group to delete:',
-      choices: [...groups.map(g => ({ name: g, value: g })), backChoice],
+    const aliasName = await select({
+      message: 'Select alias to delete:',
+      choices: [...aliases.map(a => ({ name: a, value: a })), backChoice],
       loop: false,
     });
-    if (name === BACK) return;
+    if (aliasName === BACK) return;
 
-    const yes = await confirm({ message: `Delete group "${name}"?`, default: false });
+    const yes = await confirm({ message: `Delete alias "${aliasName}"?`, default: false });
     if (!yes) { console.log(chalk.gray('  Cancelled.')); return; }
 
-    deleteGroup(name);
-    console.log(chalk.green(`\n  ✔ Group "${name}" deleted\n`));
+    deleteAlias(aliasName);
+    console.log(chalk.green(`\n  ✔ Alias "${aliasName}" deleted\n`));
   });
 }
 
@@ -1220,7 +1163,7 @@ function cmdHelp() {
   item('List Providers', 'Table of providers, models and accounts');
   item('Add Provider', 'Type, base URL, one or more accounts, model import');
   item('Edit Provider', 'Change type, base URL, aliases');
-  item('Delete Provider', 'Remove provider (cascades to groups)');
+  item('Delete Provider', 'Remove provider (cascades to aliases)');
   item('Test Provider', 'Live ping using the default account');
   item('Sync Models', 'Re-fetch /v1/models and import new ones');
   item('Manage Accounts', 'List/add/edit/delete accounts, set default');
@@ -1233,18 +1176,23 @@ function cmdHelp() {
   item('Models → Set Default', 'Sets the global fallback default');
 
   section('Models');
-  item('List Models', 'Table of all models with aliases');
-  item('Add Model', 'Pick provider → name → real model → aliases');
+  item('List Models', 'Internal model table (providers → real models)');
+  item('Add Model', 'Pick provider → name → real model');
   item('Delete Model', 'Pick provider → model → confirm');
-  item('Add Alias', 'Extra name that resolves to a model');
-  item('Set Default Model', 'Used when a request omits the model');
+  item('Set Default Model', 'Fallback default for the default provider');
   item('Test Model', 'Live completion test');
 
-  section('Groups');
-  item('List Groups', 'Virtual failover names and members');
-  item('Add Group', 'Members (provider:model) + strategy');
-  item('Edit Group', 'Change members or strategy');
-  item('Delete Group', 'Remove a group');
+  section('Aliases (agent-visible model names)');
+  item('List Aliases', 'Table of aliases + what they point at');
+  item('Add Alias', 'Pick provider → model → name (default: provider/model)');
+  item('Edit Alias', 'Rename or re-point an alias');
+  item('Delete Alias', 'Remove an alias (agents lose that model name)');
+
+  section('How agents see models');
+  item('/v1/models', 'Shows aliases + the literal "default" — nothing else');
+  item('default', 'Resolves to the default provider\'s default model');
+  item('Unknown name', 'Falls back to the default provider\'s default model');
+  item('Account rotation', 'On 429/402 the provider\'s next account is tried');
 
   section('Server / daemon (shell)');
   item('abproxy start', 'Start as background daemon');

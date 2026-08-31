@@ -1,6 +1,6 @@
 # abproxy
 
-> Local LLM gateway/proxy — one endpoint, many providers, automatic failover.
+> Local LLM gateway/proxy — one endpoint, many providers, automatic account rotation.
 
 Point every AI agent (Claude Code, opencode, codex, your own apps) at one stable `http://localhost:1986` endpoint, and swap real providers/models/keys behind it without touching agent configs.
 
@@ -16,54 +16,54 @@ abproxy
 
 # Or use CLI commands directly
 abproxy provider add
-abproxy model list
+abproxy alias add
 abproxy start
 ```
+
+## How it works
+
+```
+Agents ──► http://localhost:1986 ──► abproxy ──► provider accounts
+            model = alias name          │          (rotate on quota)
+            or "default"                └── real provider/model/key
+```
+
+1. **Add providers** — each with one or more accounts (API keys).
+2. **Create aliases** — the *only* model names agents ever see. Suggested form: `provider/model-name`, e.g. `gorouter/claude-opus-4-8`.
+3. **Point agents** at `http://localhost:1986` with the local API key. In the agent's model field, use an alias or the literal `default`.
+
+### What agents see at /v1/models
+
+**Only aliases** (plus `default`). If no alias is created, no model is shown. This solves the "same model name on many providers" problem — the alias pins a name to exactly one provider and model.
+
+### Model resolution
+
+| Request model field | Resolves to |
+|---|---|
+| `gorouter/claude-opus-4-8` (an alias) | exactly that provider + model |
+| `default` (literal) | default provider's default model |
+| *(empty)* | default provider's default model |
+| anything unknown | default provider's default model — never a hard error |
+
+Aliases and defaults are **pinned to one provider** — requests never silently go elsewhere. Instead, when a provider account is rate-limited/exhausted (HTTP 429/402/401/403), abproxy **rotates to the provider's next account** automatically and retries.
 
 ## Features
 
 - **One local endpoint** (`http://localhost:1986`) for all your agents
-- **Multi-provider support** — Anthropic-native and OpenAI-compatible APIs
+- **Aliases as agent-visible model names** — pin any name to any provider/model
+- **Multi-provider** — Anthropic-native and OpenAI-compatible APIs
+- **Dual-protocol providers** — native passthrough when upstream supports the client's protocol
 - **Multi-account providers** — several API keys per provider, one active
-- **Default provider + per-provider default model** — requests without a model go to your default provider's default model (global default as fallback)
-- **Auto model discovery** — fetches available models from provider's `/v1/models` endpoint
-- **Same-model failover** — `opus-5` on provider1 rate-limits → auto-retry on provider2
-- **Protocol translation** — OpenAI ↔ Anthropic format conversion (request + streaming)
-- **Streaming passthrough** — SSE streams piped directly, no buffering
-- **Config hot-reload** — edit config while server is running, changes apply instantly
+- **Automatic account rotation** — quota exhausted → next account, transparently
+- **Default provider + per-provider default model** — `default` just works
+- **Auto model discovery** — fetches available models from provider's `/v1/models`
+- **Config hot-reload** — edit config while server runs, changes apply instantly
 - **Agent setup wrappers** — `abproxy setup claude-code|opencode|codex`
-- **Interactive REPL** — Claude-Code-style `/` slash commands
 
-## Works With
-
-abproxy works as a drop-in proxy for any provider that exposes OpenAI-compatible or Anthropic-native APIs:
-
-| Provider | Base URL Pattern | Type |
-|---|---|---|
-| seekai.cc | `https://seekai.cc/v1` | OpenAI-compatible + Anthropic |
-| gorouter.app | `https://gorouter.app/v1` | OpenAI-compatible + Anthropic |
-| agentrouter.org | `https://agentrouter.org/v1` | OpenAI-compatible |
-| OpenAI | `https://api.openai.com/v1` | OpenAI-compatible |
-| Anthropic | `https://api.anthropic.com` | Anthropic-native |
-| Any OpenAI-compatible | `https://your-provider.com/v1` | OpenAI-compatible |
-
-### Dual-Protocol Providers
-
-Some upstreams (seekai.cc, gorouter.app) expose **both** endpoints — `/v1/chat/completions` (OpenAI, `Authorization: Bearer`) and `/v1/messages` (Anthropic, `x-api-key`). For these, set `protocols: ["openai", "anthropic"]` on the provider (asked during `provider add`, changeable via `provider edit`).
-
-Why it matters: when Claude Code sends an Anthropic-format request, abproxy forwards it **natively** to `/v1/messages` with `x-api-key` — no lossy OpenAI translation, so thinking blocks, tool_use, and cache_control survive intact. OpenAI-format clients still go to `/v1/chat/completions` with `Bearer`. If the upstream only supports one protocol, abproxy translates as before.
-
-### Agent Configuration
+## Agent Configuration
 
 ```bash
-# Claude Code
-abproxy setup claude-code
-
-# Codex
-abproxy setup codex
-
-# opencode
-abproxy setup opencode
+abproxy setup claude-code   # or opencode / codex
 ```
 
 Or set manually:
@@ -73,114 +73,65 @@ Or set manually:
 export ANTHROPIC_BASE_URL=http://localhost:1986
 export ANTHROPIC_API_KEY=sk-local-...
 
-# Codex / opencode
+# Codex / opencode (OpenAI-compatible)
 # Base URL: http://localhost:1986/v1
 # API Key: sk-local-...
+# Model:    an alias name, or "default"
 ```
-
-## Architecture
-
-```
-Agents → http://localhost:1986 → abproxy daemon → provider1.com
-                                                 → provider2.com
-                                                 → provider3.com
-```
-
-- **CLI/REPL** — management + interactive mode
-- **Daemon** — background HTTP server handling proxy + failover
-- **Config** — `~/.abproxy/config.json` (source of truth)
 
 ## CLI Commands
 
-### Provider Management
+### Providers
 ```bash
-abproxy provider add              # Interactive setup (auto-fetches models)
-abproxy provider list             # Table view
-abproxy provider edit <name>      # Edit provider
-abproxy provider delete <name>    # Delete + cascade
-abproxy provider test <name>      # Live ping test
-abproxy provider sync <name>      # Re-fetch models from upstream
-abproxy provider set-default <n>  # Default provider (no-model requests)
-abproxy provider default-model <n> [model]  # Per-provider default model
+abproxy provider add                       # Interactive setup (accounts, models)
+abproxy provider list                      # Table view
+abproxy provider edit <name>               # Edit type/URL/protocols
+abproxy provider delete <name>             # Delete + cascade aliases
+abproxy provider test <name>               # Live ping test
+abproxy provider sync <name>               # Re-fetch models from upstream
+abproxy provider set-default <name>        # Default provider for "default"
+abproxy provider default-model <name> [m]  # Per-provider default model
 ```
 
-### Model Management
+### Aliases (agent-visible model names)
 ```bash
-abproxy model add <provider>      # Add model to provider
-abproxy model list [--provider p] # List all/filtered models
-abproxy model edit <p> <m>        # Edit model
-abproxy model delete <p> <m>      # Delete model
-abproxy model alias <m> <alias>   # Add alias
-abproxy model set-default <m>     # Set default model
-abproxy model test <m>            # Live completion test
+abproxy alias list
+abproxy alias add [name] [provider] [model]   # e.g. abproxy alias add gorouter/claude-opus-4-8 gorouter claude-opus-4-8
+abproxy alias edit <name>
+abproxy alias delete <name>
 ```
 
-### Model Groups (Failover)
+### Models (internal)
 ```bash
-abproxy group create <name>       # Create failover group
-abproxy group edit <name>         # Edit group members
-abproxy group list                # List all groups
-abproxy group delete <name>       # Delete group
+abproxy model add <provider>
+abproxy model list [--provider p]
+abproxy model edit <p> <m>
+abproxy model delete <p> <m>          # cascades aliases
+abproxy model set-default <m>         # global fallback default
+abproxy model test <m>
 ```
 
 ### Daemon Control
 ```bash
-abproxy start                     # Start as background daemon
-abproxy start --foreground        # Start in foreground
-abproxy stop                      # Stop daemon
-abproxy restart                   # Restart daemon
-abproxy status                    # Check daemon status + health
-abproxy logs [-f]                 # View/follow logs
-```
-
-### Agent Setup
-```bash
-abproxy setup claude-code         # Patch Claude Code config
-abproxy setup opencode            # Patch opencode config
-abproxy setup codex               # Patch codex config
+abproxy start                # background daemon
+abproxy start --foreground
+abproxy stop
+abproxy restart
+abproxy status
+abproxy logs [-f]
 ```
 
 ## API Endpoints
 
 | Endpoint | Description |
 |---|---|
-| `GET /health` | Health check + provider status |
-| `GET /v1/models` | List all available models (names + aliases + realModel IDs) |
-| `GET /v1/models/:id` | Get a single model by ID |
+| `GET /health` | Health check (no auth) |
+| `GET /v1/models` | **Alias names + `default`** — nothing else |
+| `GET /v1/models/:id` | Alias lookup (`:id` = alias name or `default`) |
 | `POST /v1/chat/completions` | OpenAI-compatible completions |
 | `POST /v1/messages` | Anthropic-native messages |
 
-All endpoints (except `/health`) require `Authorization: Bearer <localApiKey>` or `x-api-key: <localApiKey>`.
-
-### Model Discovery
-
-When you add a provider, abproxy automatically fetches available models from the provider's `/v1/models` endpoint. You can re-sync models at any time:
-
-```bash
-abproxy provider sync myProvider
-```
-
-The `/v1/models` endpoint on abproxy itself lists every configured model by:
-- Its **model name** (your custom alias like `opus-5`)
-- Its **model aliases** (all aliases)
-- Its **realModel** ID (the upstream API model ID)
-- **Model groups** (virtual failover names)
-
-This ensures agents like Claude Code, Codex, or opencode can find the model regardless of which name they use.
-
-### Default Model Resolution
-
-When a request omits the `model` field, abproxy resolves a default:
-
-1. **Default provider** (if set) — uses that provider's own default model. The request is pinned to the default provider; it never fails over to other providers.
-2. **Global default model** (fallback) — resolved through the normal name/alias/group chain, so failover groups still apply.
-
-```bash
-abproxy provider set-default seekai                    # default provider
-abproxy provider default-model seekai claude-opus-5    # its default model
-```
-
-The REPL equivalents are `Providers → Set Default Provider` and `Providers → Set Default Model`.
+All endpoints (except `/health`) accept `Authorization: Bearer <localApiKey>` or `x-api-key: <localApiKey>`.
 
 ## Config Example
 
@@ -188,61 +139,47 @@ The REPL equivalents are `Providers → Set Default Provider` and `Providers →
 {
   "port": 1986,
   "localApiKey": "sk-local-...",
-  "defaultModel": "opus-5",
+  "defaultProvider": "gorouter",
+  "defaultModel": null,
   "providers": {
-    "seekai": {
-      "aliases": ["sk"],
-      "type": "openai-compatible",
-      "baseURL": "https://seekai.cc/v1",
-      "apiKey": "sk-your-key",
-      "autoFetch": true,
-      "protocols": ["openai", "anthropic"],
-      "models": {
-        "claude-opus-4-8": {
-          "realModel": "claude-opus-4-8",
-          "aliases": ["opus"]
-        },
-        "glm-5.3-flash": {
-          "realModel": "glm-5.3-flash",
-          "aliases": ["glm"]
-        }
-      }
-    },
     "gorouter": {
-      "aliases": ["gr"],
       "type": "openai-compatible",
-      "baseURL": "https://gorouter.app/v1",
-      "apiKey": "sk-your-key",
+      "baseURL": "https://gorouter.app",
+      "protocols": ["openai", "anthropic"],
+      "defaultModel": "claude-opus-4-8",
       "autoFetch": true,
+      "accounts": [
+        { "name": "Main", "apiKey": "sk-...", "isDefault": true },
+        { "name": "Backup", "apiKey": "sk-...", "isDefault": false }
+      ],
       "models": {
-        "claude-opus-5-thinking": {
-          "realModel": "claude-opus-5-thinking",
-          "aliases": []
-        }
+        "claude-opus-4-8": { "realModel": "claude-opus-4-8" }
       }
     }
   },
-  "modelGroups": {
-    "opus": {
-      "members": ["seekai:claude-opus-4-8", "gorouter:claude-opus-5-thinking"],
-      "strategy": "failover"
-    }
+  "aliases": {
+    "gorouter/claude-opus-4-8": { "provider": "gorouter", "model": "claude-opus-4-8" }
   }
 }
 ```
 
-## URL Handling
+Old configs (with `modelGroups`, per-provider `aliases`, per-model `aliases`, or single `apiKey`) are **auto-migrated** on first load:
+- group members `provider:model` → aliases `provider/model`
+- per-model aliases → top-level aliases
+- `apiKey` → `accounts[0]`
+- dangling references pruned
 
-abproxy handles different provider URL patterns automatically:
+## Dual-Protocol Providers
+
+Some upstreams (seekai.cc, gorouter.app) expose **both** endpoints — `/v1/chat/completions` (OpenAI, `Authorization: Bearer`) and `/v1/messages` (Anthropic, `x-api-key`). For these, set `protocols: ["openai", "anthropic"]`. abproxy then forwards each client request **natively** in the client's own protocol — no lossy translation, so thinking blocks, tool_use, and cache_control survive intact.
+
+## URL Handling
 
 | You enter | abproxy sends to |
 |---|---|
-| `https://seekai.cc/v1` | `https://seekai.cc/v1/chat/completions` |
-| `https://seekai.cc` | `https://seekai.cc/v1/chat/completions` |
-| `https://api.openai.com/v1` | `https://api.openai.com/v1/chat/completions` |
+| `https://seekai.cc/v1` | `https://seekai.cc/v1/chat/completions` or `.../v1/messages` |
+| `https://seekai.cc` | `https://seekai.cc/v1/...` |
 | `https://api.anthropic.com` | `https://api.anthropic.com/v1/messages` |
-
-No need to worry about trailing slashes or `/v1` — abproxy normalizes everything.
 
 ## License
 

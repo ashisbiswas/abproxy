@@ -71,9 +71,7 @@ assert.equal(mgr.listAccounts('seekai').filter(a => a.isDefault).length, 1, 'exa
 assert.equal(mgr.getActiveApiKey(mgr.getProvider('seekai')), 'sk-legacy-key-1234567890',
   'adding a non-default account must not change the active key');
 assert.throws(() => mgr.addAccount('seekai', { name: 'Backup', apiKey: 'x' }), /already exists/);
-mgr.addAccount('sk', { name: 'ViaAlias', apiKey: 'sk-alias-key-bbbb' });
-assert.equal(mgr.listAccounts('seekai').length, 3, 'alias should resolve to the provider');
-console.log('OK 3. addAccount works (incl. alias resolution + duplicate guard)');
+console.log('OK 3. addAccount works (incl. duplicate guard; provider aliases removed in the alias rework)');
 
 // ── 4. Set default account switches the active key ───────────────────
 mgr.setDefaultAccount('seekai', 'Backup');
@@ -99,7 +97,7 @@ console.log('OK 6. editAccount renames and rotates the key');
 // ── 7. Deleting the default promotes another account ─────────────────
 mgr.deleteAccount('seekai', 'Backup2');
 const remaining = mgr.listAccounts('seekai');
-assert.equal(remaining.length, 2);
+assert.equal(remaining.length, 1);
 assert.equal(remaining.filter(a => a.isDefault).length, 1, 'a new default must be promoted');
 assert.equal(remaining[0].isDefault, true);
 assert.throws(() => mgr.deleteAccount('seekai', 'Nope'), /not found/);

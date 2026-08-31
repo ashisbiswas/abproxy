@@ -7,7 +7,6 @@ import {
   addModel,
   editModel,
   deleteModel,
-  addModelAlias,
   setDefaultModel,
   listModels,
   listProviders,
@@ -32,13 +31,12 @@ export function registerModelCommands(program) {
           return;
         }
 
-        const modelName = await input({ message: 'Model name (your alias, e.g. "opus-5"):' });
+        const modelName = await input({ message: 'Model name (your internal name, e.g. "opus-5"):' });
         const realModel = await input({ message: 'Real model name (API model ID):' });
-        const aliasStr = await input({ message: 'Model aliases (comma-separated, or blank):' });
-        const aliases = aliasStr ? aliasStr.split(',').map(a => a.trim()).filter(Boolean) : [];
 
-        addModel(resolvedProvider, modelName, { realModel, aliases });
+        addModel(resolvedProvider, modelName, { realModel });
         console.log(chalk.green(`\n✔ Model "${modelName}" added to provider "${resolvedProvider}"`));
+        console.log(chalk.gray('  Expose it to agents with: abproxy alias add <alias-name> <provider> <model>'));
       } catch (err) {
         if (err.name === 'ExitPromptError') return;
         console.error(chalk.red(`✖ ${err.message}`));
@@ -63,23 +61,26 @@ export function registerModelCommands(program) {
           chalk.cyan('Model'),
           chalk.cyan('Provider'),
           chalk.cyan('Real Model'),
-          chalk.cyan('Aliases'),
           chalk.cyan('Default'),
         ],
         style: { head: [], border: ['gray'] },
       });
 
       for (const m of models) {
+        const flags = [
+          m.isProviderDefault ? chalk.cyan('◆ provider') : '',
+          m.isDefault ? chalk.green('★ global') : '',
+        ].filter(Boolean).join(' ');
         table.push([
           chalk.white.bold(m.name),
           chalk.gray(m.provider),
           chalk.blue(m.realModel),
-          m.aliases.length > 0 ? m.aliases.join(', ') : chalk.gray('—'),
-          m.isDefault ? chalk.green('★') : chalk.gray('—'),
+          flags || chalk.gray('—'),
         ]);
       }
 
       console.log('\n' + table.toString() + '\n');
+      console.log(chalk.gray('  Internal names only — agents see aliases (abproxy alias list) and "default".\n'));
     });
 
   // ─── model edit ────────────────────────────────────────────────
@@ -102,13 +103,8 @@ export function registerModelCommands(program) {
         }
 
         const realModel = await input({ message: 'Real model name:', default: existing.realModel });
-        const aliasStr = await input({
-          message: 'Aliases (comma-separated):',
-          default: (existing.aliases || []).join(', '),
-        });
-        const aliases = aliasStr ? aliasStr.split(',').map(a => a.trim()).filter(Boolean) : [];
 
-        editModel(resolvedProvider, modelName, { realModel, aliases });
+        editModel(resolvedProvider, modelName, { realModel });
         console.log(chalk.green(`\n✔ Model "${modelName}" updated`));
       } catch (err) {
         if (err.name === 'ExitPromptError') return;
@@ -123,7 +119,7 @@ export function registerModelCommands(program) {
     .action(async (providerRef, modelName) => {
       try {
         const yes = await confirm({
-          message: `Delete model "${modelName}" from "${providerRef}"?`,
+          message: `Delete model "${modelName}" from "${providerRef}"? Aliases pointing at it will be removed.`,
           default: false,
         });
         if (!yes) {
@@ -139,27 +135,14 @@ export function registerModelCommands(program) {
       }
     });
 
-  // ─── model alias ───────────────────────────────────────────────
-  model
-    .command('alias <model> <alias>')
-    .description('Add an alias to a model')
-    .action(async (modelName, alias) => {
-      try {
-        addModelAlias(modelName, alias);
-        console.log(chalk.green(`✔ Alias "${alias}" added to model "${modelName}"`));
-      } catch (err) {
-        console.error(chalk.red(`✖ ${err.message}`));
-      }
-    });
-
   // ─── model set-default ─────────────────────────────────────────
   model
     .command('set-default <model>')
-    .description('Set the default model')
+    .description('Set the global fallback default model')
     .action(async (modelName) => {
       try {
         setDefaultModel(modelName);
-        console.log(chalk.green(`✔ Default model set to "${modelName}"`));
+        console.log(chalk.green(`✔ Global fallback default model set to "${modelName}"`));
       } catch (err) {
         console.error(chalk.red(`✖ ${err.message}`));
       }

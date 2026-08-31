@@ -33,7 +33,7 @@ export async function startServer(configOverride = null) {
       console.log(`  📋 API key: ${config.localApiKey.substring(0, 16)}...`);
       console.log(`  🎯 Default model: ${formatDefaultModel(config) || 'not set'}`);
       console.log(`  📡 Providers: ${Object.keys(config.providers).length}`);
-      console.log(`  🔀 Groups: ${Object.keys(config.modelGroups).length}`);
+      console.log(`  🔀 Aliases: ${Object.keys(config.aliases || {}).length}`);
       console.log('');
 
       // Set up config hot-reload

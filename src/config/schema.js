@@ -10,7 +10,7 @@ export function createDefaultConfig() {
     defaultProvider: null,
     defaultModel: null,
     providers: {},
-    modelGroups: {},
+    aliases: {},
   };
 }
 
@@ -68,8 +68,8 @@ export function validateProvider(provider) {
     }
   }
 
-  if (provider.aliases && !Array.isArray(provider.aliases)) {
-    errors.push('Provider aliases must be an array');
+  if (provider.aliases !== undefined) {
+    errors.push('Provider-level "aliases" is no longer supported — create an alias via the alias menu instead');
   }
   if (provider.models && typeof provider.models !== 'object') {
     errors.push('Provider models must be an object');
@@ -108,14 +108,109 @@ export function validateProvider(provider) {
  * Returns true if migration was performed.
  */
 export function migrateProvider(provider) {
+  let migrated = false;
   if (provider.apiKey && (!provider.accounts || provider.accounts.length === 0)) {
     provider.accounts = [
       { name: 'Default', apiKey: provider.apiKey, isDefault: true },
     ];
     delete provider.apiKey;
-    return true;
+    migrated = true;
   }
-  return false;
+  // Drop provider-level aliases (no longer a concept)
+  if (provider.aliases !== undefined) {
+    delete provider.aliases;
+    migrated = true;
+  }
+  // Note: model-level aliases are extracted into config.aliases by
+  // migrateConfig BEFORE this runs (order matters there).
+  return migrated;
+}
+
+/**
+ * Migrate the full config to the current schema:
+ * - modelGroups → aliases (each member "provider:model" becomes a
+ *   "provider/model" alias; a single-member group keeps its name if it
+ *   follows provider/model form, otherwise name/name)
+ * - model-level aliases → top-level "alias → provider:model" entries
+ * - drop modelGroups, per-provider and per-model alias fields
+ * Returns true if anything changed.
+ */
+export function migrateConfig(config) {
+  let migrated = false;
+
+  const aliases = {};
+
+  // 1. Model-level aliases become top-level aliases — MUST happen before
+  // migrateProvider strips the model.aliases fields below.
+  for (const [pName, provider] of Object.entries(config.providers || {})) {
+    for (const [mName, model] of Object.entries(provider.models || {})) {
+      for (const alias of (model.aliases || [])) {
+        if (!aliases[alias]) {
+          aliases[alias] = { provider: pName, model: mName };
+          migrated = true;
+        }
+      }
+    }
+  }
+
+  // 2. modelGroups → aliases. Each member becomes "provider/model".
+  for (const [gName, group] of Object.entries(config.modelGroups || {})) {
+    const members = (group && Array.isArray(group.members)) ? group.members : [];
+    if (members.length === 0) continue;
+    for (const member of members) {
+      const [pRef, mName] = member.split(':');
+      if (!mName) continue;
+      const aliasName = `${pRef}/${mName}`;
+      if (!aliases[aliasName]) {
+        aliases[aliasName] = { provider: pRef, model: mName };
+        migrated = true;
+      }
+    }
+    // Single-member group: also keep its own name as an alias
+    if (members.length === 1) {
+      const [pRef, mName] = members[0].split(':');
+      if (mName && !aliases[gName]) {
+        aliases[gName] = { provider: pRef, model: mName };
+        migrated = true;
+      }
+    }
+  }
+
+  // 3. NOW strip legacy fields (apiKey → accounts, provider/model aliases)
+  for (const provider of Object.values(config.providers || {})) {
+    for (const model of Object.values(provider.models || {})) {
+      if (model && model.aliases !== undefined) {
+        delete model.aliases;
+        migrated = true;
+      }
+    }
+    if (migrateProvider(provider)) migrated = true;
+  }
+
+  if (config.modelGroups !== undefined) {
+    delete config.modelGroups;
+    migrated = true;
+  }
+
+  // Merge with any existing aliases (existing win — user-created)
+  if (Object.keys(aliases).length > 0) {
+    config.aliases = { ...aliases, ...(config.aliases || {}) };
+  } else if (config.aliases === undefined) {
+    config.aliases = {};
+  }
+
+  // Dangling provider/model alias references get pruned (provider deleted, etc.)
+  if (config.aliases) {
+    for (const [aName, alias] of Object.entries(config.aliases)) {
+      const provider = (config.providers || {})[alias.provider];
+      if (!provider || !provider.models || !provider.models[alias.model]) {
+        delete config.aliases[aName];
+        migrated = true;
+      }
+    }
+  }
+
+  return migrated;
 }
 
 /**
@@ -127,31 +222,26 @@ export function validateModel(model) {
   if (!model.realModel || typeof model.realModel !== 'string') {
     errors.push('Model realModel is required and must be a string');
   }
-  if (model.aliases && !Array.isArray(model.aliases)) {
-    errors.push('Model aliases must be an array');
+  if (model.aliases !== undefined) {
+    errors.push('Model-level "aliases" is no longer supported — create an alias via the alias menu instead');
   }
 
   return { valid: errors.length === 0, errors };
 }
 
 /**
- * Validate a model group object structure
+ * Validate an alias object structure.
+ * An alias is a virtual model name exposed to agents; it maps to a
+ * provider and that provider's model, e.g. "gorouter/claude-opus-4-8".
  */
-export function validateGroup(group) {
+export function validateAlias(alias) {
   const errors = [];
 
-  if (!group.members || !Array.isArray(group.members) || group.members.length === 0) {
-    errors.push('Group must have at least one member in format "provider:model"');
-  } else {
-    for (const member of group.members) {
-      if (!member.includes(':')) {
-        errors.push(`Invalid member format "${member}" — must be "provider:model"`);
-      }
-    }
+  if (!alias.provider || typeof alias.provider !== 'string') {
+    errors.push('Alias provider is required and must be a string');
   }
-
-  if (group.strategy && !['failover', 'round-robin'].includes(group.strategy)) {
-    errors.push('Group strategy must be "failover" or "round-robin"');
+  if (!alias.model || typeof alias.model !== 'string') {
+    errors.push('Alias model is required and must be a string');
   }
 
   return { valid: errors.length === 0, errors };
@@ -181,8 +271,8 @@ export function validateConfig(config) {
   if (typeof config.providers !== 'object') {
     errors.push('providers must be an object');
   }
-  if (typeof config.modelGroups !== 'object') {
-    errors.push('modelGroups must be an object');
+  if (typeof config.aliases !== 'object') {
+    errors.push('aliases must be an object');
   }
 
   // Validate each provider
@@ -201,11 +291,19 @@ export function validateConfig(config) {
     }
   }
 
-  // Validate each group
-  for (const [name, group] of Object.entries(config.modelGroups || {})) {
-    const result = validateGroup(group);
+  // Validate each alias
+  for (const [aliasName, alias] of Object.entries(config.aliases || {})) {
+    const result = validateAlias(alias);
     if (!result.valid) {
-      errors.push(...result.errors.map(e => `Group "${name}": ${e}`));
+      errors.push(...result.errors.map(e => `Alias "${aliasName}": ${e}`));
+      continue;
+    }
+    // Reference check: provider + model must exist
+    const provider = config.providers[alias.provider];
+    if (!provider) {
+      errors.push(`Alias "${aliasName}": provider "${alias.provider}" not found`);
+    } else if (!provider.models || !provider.models[alias.model]) {
+      errors.push(`Alias "${aliasName}": model "${alias.model}" not found on provider "${alias.provider}"`);
     }
   }
 

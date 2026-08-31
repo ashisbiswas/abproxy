@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { createDefaultConfig, validateConfig, migrateProvider } from './schema.js';
+import { createDefaultConfig, validateConfig, migrateProvider, migrateConfig } from './schema.js';
 import { logger } from '../utils/logger.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.abproxy');
@@ -33,14 +33,9 @@ export function getConfig() {
   const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
   const config = JSON.parse(raw);
 
-  // Auto-migrate legacy providers (single apiKey → accounts[])
-  let migrated = false;
-  for (const [, provider] of Object.entries(config.providers || {})) {
-    if (migrateProvider(provider)) {
-      migrated = true;
-    }
-  }
-  if (migrated) {
+  // Auto-migrate to the current schema (apiKey → accounts[], groups → aliases,
+  // per-provider/per-model alias fields dropped). Persisted if anything changed.
+  if (migrateConfig(config)) {
     saveConfig(config);
   }
 
@@ -182,13 +177,18 @@ export function addProvider(name, provider) {
   }
 
   const providerData = {
-    aliases: provider.aliases || [],
     type: provider.type,
     baseURL: provider.baseURL,
     models: provider.models || {},
     autoFetch: provider.autoFetch !== undefined ? provider.autoFetch : true,
+    ...(provider.protocols ? { protocols: provider.protocols } : {}),
     ...(provider.headers ? { headers: provider.headers } : {}),
   };
+
+  // Models carry only realModel now (aliases are top-level config.aliases)
+  for (const model of Object.values(providerData.models)) {
+    if (model && model.aliases !== undefined) delete model.aliases;
+  }
 
   // Use accounts array if provided, otherwise create from single apiKey
   if (provider.accounts && provider.accounts.length > 0) {
@@ -231,13 +231,8 @@ export function deleteProvider(name) {
     config.defaultProvider = null;
   }
 
-  // Cascade: remove from model groups
-  for (const [groupName, group] of Object.entries(config.modelGroups)) {
-    group.members = group.members.filter(m => !m.startsWith(`${resolvedName}:`));
-    if (group.members.length === 0) {
-      delete config.modelGroups[groupName];
-    }
-  }
+  // Cascade: prune aliases pointing at this provider
+  pruneAliases(config);
 
   saveConfig(config);
   return config;
@@ -396,7 +391,6 @@ export function addModel(providerName, modelName, model) {
   }
   provider.models[modelName] = {
     realModel: model.realModel,
-    aliases: model.aliases || [],
   };
   saveConfig(config);
   return config;
@@ -434,35 +428,11 @@ export function deleteModel(providerName, modelName) {
     delete provider.defaultModel;
   }
 
-  // Cascade: remove from model groups
-  const memberKey = `${resolvedProvider}:${modelName}`;
-  for (const [groupName, group] of Object.entries(config.modelGroups)) {
-    group.members = group.members.filter(m => m !== memberKey);
-    if (group.members.length === 0) {
-      delete config.modelGroups[groupName];
-    }
-  }
+  // Cascade: prune aliases pointing at the deleted model
+  pruneAliases(config);
 
   saveConfig(config);
   return config;
-}
-
-export function addModelAlias(modelName, alias) {
-  const config = getConfig();
-  // Find which provider has this model
-  for (const [, provider] of Object.entries(config.providers)) {
-    if (provider.models[modelName]) {
-      if (!provider.models[modelName].aliases) {
-        provider.models[modelName].aliases = [];
-      }
-      if (!provider.models[modelName].aliases.includes(alias)) {
-        provider.models[modelName].aliases.push(alias);
-      }
-      saveConfig(config);
-      return config;
-    }
-  }
-  throw new Error(`Model "${modelName}" not found on any provider`);
 }
 
 export function setDefaultModel(modelName) {
@@ -487,7 +457,6 @@ export function listModels(providerName = null) {
         provider: pName,
         name: mName,
         realModel: model.realModel,
-        aliases: model.aliases || [],
         isDefault: config.defaultModel === mName,
         isProviderDefault: provider.defaultModel === mName,
       });
@@ -519,7 +488,6 @@ export function importFetchedModels(providerName, selectedModels) {
     if (!provider.models[modelName]) {
       provider.models[modelName] = {
         realModel: m.id,
-        aliases: [],
       };
       added++;
     }
@@ -583,87 +551,131 @@ export function syncProviderModels(providerName, fetchedModels) {
 }
 
 
-// ─── Group CRUD ──────────────────────────────────────────────────────
+// ─── Alias CRUD ──────────────────────────────────────────────────────
+// Aliases are the virtual model names agents see at /v1/models.
+// Each maps to one provider + one of its models, e.g.
+//   "gorouter/claude-opus-4-8" → { provider: "GoRouter", model: "claude-opus-4-8" }
 
-export function addGroup(name, group) {
+/**
+ * Create an alias. Suggested form: "provider/model-name".
+ * The provider/model parts are validated against the config.
+ */
+export function addAlias(aliasName, { provider, model }) {
   const config = getConfig();
-  if (config.modelGroups[name]) {
-    throw new Error(`Group "${name}" already exists`);
+  if (!aliasName || typeof aliasName !== 'string') {
+    throw new Error('Alias name is required');
   }
-  config.modelGroups[name] = {
-    members: group.members,
-    strategy: group.strategy || 'failover',
-    default: group.default || false,
-  };
+  if (config.aliases[aliasName]) {
+    throw new Error(`Alias "${aliasName}" already exists`);
+  }
+  const resolvedName = resolveProviderName(config, provider);
+  if (!resolvedName) {
+    throw new Error(`Provider "${provider}" not found`);
+  }
+  const providerObj = config.providers[resolvedName];
+  if (!providerObj.models || !providerObj.models[model]) {
+    throw new Error(`Model "${model}" not found on provider "${resolvedName}"`);
+  }
+  config.aliases[aliasName] = { provider: resolvedName, model };
   saveConfig(config);
   return config;
 }
 
-export function editGroup(name, updates) {
+export function editAlias(aliasName, updates) {
   const config = getConfig();
-  if (!config.modelGroups[name]) {
-    throw new Error(`Group "${name}" not found`);
+  const alias = config.aliases[aliasName];
+  if (!alias) {
+    throw new Error(`Alias "${aliasName}" not found`);
   }
-  Object.assign(config.modelGroups[name], updates);
+  const newProvider = updates.provider !== undefined ? updates.provider : alias.provider;
+  const newModel = updates.model !== undefined ? updates.model : alias.model;
+
+  const resolvedName = resolveProviderName(config, newProvider);
+  if (!resolvedName) {
+    throw new Error(`Provider "${newProvider}" not found`);
+  }
+  const providerObj = config.providers[resolvedName];
+  if (!providerObj.models || !providerObj.models[newModel]) {
+    throw new Error(`Model "${newModel}" not found on provider "${resolvedName}"`);
+  }
+
+  // Handle rename
+  delete config.aliases[aliasName];
+  const targetName = updates.name !== undefined ? updates.name : aliasName;
+  config.aliases[targetName] = { provider: resolvedName, model: newModel };
   saveConfig(config);
   return config;
 }
 
-export function deleteGroup(name) {
+export function deleteAlias(aliasName) {
   const config = getConfig();
-  if (!config.modelGroups[name]) {
-    throw new Error(`Group "${name}" not found`);
+  if (!config.aliases[aliasName]) {
+    throw new Error(`Alias "${aliasName}" not found`);
   }
-  delete config.modelGroups[name];
+  delete config.aliases[aliasName];
   saveConfig(config);
   return config;
 }
 
-export function listGroups() {
+export function listAliases() {
   const config = getConfig();
-  return config.modelGroups;
+  return config.aliases || {};
+}
+
+/**
+ * Cascade helper — prune aliases pointing at a provider that no longer
+ * exists, or a model that was removed from its provider.
+ */
+function pruneAliases(config) {
+  let changed = false;
+  for (const [aName, alias] of Object.entries(config.aliases || {})) {
+    const provider = config.providers[alias.provider];
+    if (!provider || !provider.models || !provider.models[alias.model]) {
+      delete config.aliases[aName];
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 // ─── Alias Resolution ────────────────────────────────────────────────
 
 /**
- * Resolve a provider name or alias to the canonical provider name
+ * Resolve a provider name to the canonical provider name.
+ * (Provider-level alias fields are gone — exact name match only.)
  */
-export function resolveProviderName(config, nameOrAlias) {
-  if (config.providers[nameOrAlias]) return nameOrAlias;
-  for (const [name, provider] of Object.entries(config.providers)) {
-    if (provider.aliases && provider.aliases.includes(nameOrAlias)) {
-      return name;
-    }
-  }
-  return null;
+export function resolveProviderName(config, name) {
+  return config.providers[name] ? name : null;
 }
 
 /**
- * Resolve a provider name or alias to the provider object
+ * Resolve a provider name to the provider object
  */
-export function resolveProvider(config, nameOrAlias) {
-  const name = resolveProviderName(config, nameOrAlias);
-  return name ? config.providers[name] : null;
+export function resolveProvider(config, name) {
+  return config.providers[name] || null;
 }
 
 /**
- * Resolve a model name or alias to { providerName, modelName, model }
- * Searches across all providers.
+ * Resolve a top-level alias name to { aliasName, providerName, modelName, model }
+ * Aliases are the names agents see in /v1/models.
+ */
+export function resolveAlias(config, aliasName) {
+  const alias = (config.aliases || {})[aliasName];
+  if (!alias) return null;
+  const provider = config.providers[alias.provider];
+  const model = provider?.models?.[alias.model];
+  if (!model) return null;
+  return { aliasName, providerName: alias.provider, modelName: alias.model, model };
+}
+
+/**
+ * Resolve a model name within a provider (exact name only — per-model
+ * alias fields are gone; use top-level aliases instead).
  */
 export function resolveModelAlias(config, nameOrAlias) {
-  // Direct match: check all providers for this model name
   for (const [pName, provider] of Object.entries(config.providers)) {
-    if (provider.models[nameOrAlias]) {
+    if (provider.models && provider.models[nameOrAlias]) {
       return { providerName: pName, modelName: nameOrAlias, model: provider.models[nameOrAlias] };
-    }
-  }
-  // Alias match: check all providers for alias
-  for (const [pName, provider] of Object.entries(config.providers)) {
-    for (const [mName, model] of Object.entries(provider.models || {})) {
-      if (model.aliases && model.aliases.includes(nameOrAlias)) {
-        return { providerName: pName, modelName: mName, model };
-      }
     }
   }
   return null;

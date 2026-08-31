@@ -12,7 +12,7 @@
 import { Command } from 'commander';
 import { registerProviderCommands } from '../src/cli/provider.js';
 import { registerModelCommands } from '../src/cli/model.js';
-import { registerGroupCommands } from '../src/cli/group.js';
+import { registerAliasCommands } from '../src/cli/alias.js';
 import { registerSetupCommands } from '../src/cli/setup.js';
 import { registerDaemonCommands } from '../src/cli/daemon.js';
 import { ensureConfig } from '../src/config/manager.js';
@@ -30,7 +30,7 @@ ensureConfig();
 // Register all command groups
 registerProviderCommands(program);
 registerModelCommands(program);
-registerGroupCommands(program);
+registerAliasCommands(program);
 registerSetupCommands(program);
 registerDaemonCommands(program);
 

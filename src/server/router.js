@@ -80,7 +80,7 @@ export function createRouter() {
       port: config.port,
       defaultModel: formatDefaultModel(config),
       providers: Object.keys(config.providers).length,
-      groups: Object.keys(config.modelGroups).length,
+      aliases: Object.keys(config.aliases || {}).length,
     });
   });
 

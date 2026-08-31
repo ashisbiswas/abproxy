@@ -42,7 +42,7 @@ export function showBanner() {
   );
   console.log(
     `  ${chalk.gray('Default:')}   ${formatDefaultModel(config) ? chalk.yellow(formatDefaultModel(config)) : chalk.gray('not set')}` +
-    `       ${chalk.gray('Groups:')}    ${chalk.white(Object.keys(config.modelGroups).length)}`
+    `       ${chalk.gray('Aliases:')}  ${chalk.white(Object.keys(config.aliases || {}).length)}`
   );
   console.log(line);
   console.log(chalk.gray(`  Type ${chalk.white('/')} for commands, ${chalk.white('/help')} for full reference\n`));

@@ -1,145 +1,134 @@
 /**
- * Alias resolution and model group resolution for incoming requests.
- * Takes a model name (which may be an alias) and resolves it to
- * an ordered list of { providerName, modelName, realModel, provider } targets.
+ * Request resolution — maps the model name an agent sends to a target.
+ *
+ * Agents only see alias names (config.aliases) plus the literal "default"
+ * at /v1/models. Resolution order:
+ *
+ *   1. "default" (literal)      → default provider's default model, pinned
+ *   2. alias name               → its provider + model, pinned
+ *   3. "Provider/Model" form   → exact provider name + its model name
+ *   4. exact provider+model ref (internal "Provider:Model") → that target
+ *   5. anything else (incl. no model) → default provider's default model,
+ *      so a misconfigured agent still gets a working model
+ *
+ * Every alias/default hit is PINNED to one provider — no cross-provider
+ * failover (accounts on the pinned provider rotate instead; see failover.js).
  */
 
-import { resolveModelAlias, resolveProviderName, getEffectiveDefaultModel } from '../config/manager.js';
+import { resolveAlias, resolveProviderName, resolveModelAlias, getEffectiveDefaultModel } from '../config/manager.js';
 
 /**
- * Resolve a model identifier from a request to an ordered list of targets.
- *
- * Resolution order:
- * 0. No model given → default provider's defaultModel (pinned to that provider),
- *    else global defaultModel
- * 1. Check model groups — if the model name matches a group, return all members
- * 2. Check direct model name or alias across all providers
- * 3. If model matches "provider:model" format, resolve within that provider
- * 4. Try matching by realModel name
- *
- * Returns: Array<{ providerName, modelName, realModel, provider }>
+ * Resolve a model identifier from a request to a single target.
+ * Returns { providerName, modelName, realModel, provider } or throws.
  */
 export function resolveTargets(config, requestModel) {
-  let model = requestModel;
-  let pinnedProvider = null;
-
-  if (!model) {
-    const def = getEffectiveDefaultModel(config);
-    if (!def) {
-      throw new Error('No model specified and no default model configured');
-    }
-    model = def.modelName;
-    pinnedProvider = def.providerName;
+  // ── 1. The literal "default" ────────────────────────────────────
+  if (requestModel === 'default') {
+    return defaultTarget(config, 'default');
   }
 
-  // Default-provider pinning: use exactly the default provider's default model
-  if (pinnedProvider) {
-    const provider = config.providers[pinnedProvider];
-    const modelObj = provider && provider.models ? provider.models[model] : null;
-    if (!modelObj) {
-      throw new Error(`Default model "${model}" not found on default provider "${pinnedProvider}"`);
+  if (requestModel) {
+    // ── 2. Alias name (what /v1/models shows) ────────────────────
+    const alias = resolveAlias(config, requestModel);
+    if (alias) {
+      return [{
+        providerName: alias.providerName,
+        modelName: alias.modelName,
+        realModel: alias.model.realModel,
+        provider: config.providers[alias.providerName],
+      }];
+    }
+
+    // ── 3. "Provider/Model" form ─────────────────────────────────
+    if (requestModel.includes('/')) {
+      const [pRef, mName] = requestModel.split('/');
+      const pName = resolveProviderName(config, pRef);
+      const provider = pName ? config.providers[pName] : null;
+      const model = provider?.models?.[mName];
+      if (model) {
+        return [{
+          providerName: pName,
+          modelName: mName,
+          realModel: model.realModel,
+          provider,
+        }];
+      }
+    }
+
+    // ── 4. Internal "Provider:Model" ref ─────────────────────────
+    if (requestModel.includes(':')) {
+      const [pRef, mName] = requestModel.split(':');
+      const pName = resolveProviderName(config, pRef);
+      const provider = pName ? config.providers[pName] : null;
+      const model = provider?.models?.[mName];
+      if (model) {
+        return [{
+          providerName: pName,
+          modelName: mName,
+          realModel: model.realModel,
+          provider,
+        }];
+      }
+    }
+  }
+
+  // ── 5. No model / unknown model name → default provider's default model ──
+  // An agent configured with a stale or upstream-real model name still
+  // gets served by the default provider instead of erroring.
+  const label = requestModel || '(none)';
+  const target = defaultTarget(config, label);
+  if (requestModel) {
+    // Only reachable when a model was given but matched nothing above
+    return target;
+  }
+  return target;
+}
+
+/**
+ * The default provider's default model as a single pinned target.
+ * If no default provider is set (or it has no default model), the global
+ * defaultModel name is used — resolved to whichever provider has it.
+ */
+function defaultTarget(config, requestLabel) {
+  const def = getEffectiveDefaultModel(config);
+  if (!def) {
+    throw new Error(
+      `No default provider configured. Set one with: abproxy provider set-default <provider> ` +
+      `(and give it a default model with: abproxy provider default-model <provider> <model>)`
+    );
+  }
+
+  // Default provider path — pinned to that provider
+  if (def.providerName) {
+    const provider = config.providers[def.providerName];
+    const model = provider?.models?.[def.modelName];
+    if (!model) {
+      throw new Error(`Default model "${def.modelName}" not found on default provider "${def.providerName}"`);
     }
     return [{
-      providerName: pinnedProvider,
-      modelName: model,
-      realModel: modelObj.realModel,
+      providerName: def.providerName,
+      modelName: def.modelName,
+      realModel: model.realModel,
       provider,
+      viaDefault: true,
+      requestedName: requestLabel,
     }];
   }
 
-  const targets = [];
-
-  // 1. Check model groups
-  if (config.modelGroups && config.modelGroups[model]) {
-    const group = config.modelGroups[model];
-    for (const memberRef of group.members) {
-      const [providerRef, modelRef] = memberRef.split(':');
-      const providerName = resolveProviderName(config, providerRef) || providerRef;
-      const provider = config.providers[providerName];
-      if (!provider) continue;
-      const modelObj = provider.models[modelRef];
-      if (!modelObj) continue;
-
-      targets.push({
-        providerName,
-        modelName: modelRef,
-        realModel: modelObj.realModel,
-        provider,
-      });
-    }
-
-    if (targets.length > 0) return targets;
+  // Global defaultModel fallback — resolve the model name to a provider
+  const resolved = resolveModelAlias(config, def.modelName);
+  if (!resolved) {
+    throw new Error(
+      `Global default model "${def.modelName}" not found on any provider. ` +
+      `Set a default provider instead: abproxy provider set-default <provider>`
+    );
   }
-
-  // Also check group names via alias — the request model might be an alias
-  // that maps to a model name that has a group
-  for (const [groupName, group] of Object.entries(config.modelGroups || {})) {
-    // Check if any model alias across providers matches
-    const resolved = resolveModelAlias(config, model);
-    if (resolved && groupName === resolved.modelName) {
-      for (const memberRef of group.members) {
-        const [providerRef, modelRef] = memberRef.split(':');
-        const providerName = resolveProviderName(config, providerRef) || providerRef;
-        const provider = config.providers[providerName];
-        if (!provider) continue;
-        const modelObj = provider.models[modelRef];
-        if (!modelObj) continue;
-
-        targets.push({
-          providerName,
-          modelName: modelRef,
-          realModel: modelObj.realModel,
-          provider,
-        });
-      }
-
-      if (targets.length > 0) return targets;
-    }
-  }
-
-  // 2. Direct model resolution (name or alias)
-  const resolved = resolveModelAlias(config, model);
-  if (resolved) {
-    const provider = config.providers[resolved.providerName];
-    targets.push({
-      providerName: resolved.providerName,
-      modelName: resolved.modelName,
-      realModel: resolved.model.realModel,
-      provider,
-    });
-    return targets;
-  }
-
-  // 3. Try provider:model format
-  if (model.includes(':')) {
-    const [providerRef, modelRef] = model.split(':');
-    const providerName = resolveProviderName(config, providerRef) || providerRef;
-    const provider = config.providers[providerName];
-    if (provider && provider.models[modelRef]) {
-      targets.push({
-        providerName,
-        modelName: modelRef,
-        realModel: provider.models[modelRef].realModel,
-        provider,
-      });
-      return targets;
-    }
-  }
-
-  // 4. Try matching by realModel name (agents may send the exact upstream ID)
-  for (const [pName, provider] of Object.entries(config.providers)) {
-    for (const [mName, m] of Object.entries(provider.models || {})) {
-      if (m.realModel === model) {
-        targets.push({
-          providerName: pName,
-          modelName: mName,
-          realModel: m.realModel,
-          provider,
-        });
-        return targets;
-      }
-    }
-  }
-
-  throw new Error(`Model "${model}" not found — check model name, aliases, and groups`);
+  return [{
+    providerName: resolved.providerName,
+    modelName: resolved.modelName,
+    realModel: resolved.model.realModel,
+    provider: config.providers[resolved.providerName],
+    viaDefault: true,
+    requestedName: requestLabel,
+  }];
 }

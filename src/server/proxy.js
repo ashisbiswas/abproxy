@@ -78,70 +78,28 @@ export async function handleProxyRequest(req, res) {
 /**
  * Handle /v1/models — list available models.
  *
- * Every model name AND every alias appears as a separate entry so that
- * agents that do an exact-match lookup (Claude Code, Codex, etc.) can
- * find the model by any of its configured names.
+ * Agents see ONLY the alias names (config.aliases) plus the literal
+ * "default". No raw provider model names, no realModel IDs — the alias is
+ * the one true name of a model as far as agents are concerned.
  */
 export function handleListModels(req, res) {
   const config = getConfig();
   const models = [];
-  const seen = new Set();
 
-  // List all models from all providers (name + aliases)
-  for (const [providerName, provider] of Object.entries(config.providers)) {
-    for (const [modelName, model] of Object.entries(provider.models || {})) {
-      // Primary model name
-      if (!seen.has(modelName)) {
-        models.push({
-          id: modelName,
-          object: 'model',
-          created: Math.floor(Date.now() / 1000),
-          owned_by: providerName,
-          permission: [{ id: `modelperm-${modelName}`, allow_create_engine: false, allow_sampling: true, allow_logprobs: true, allow_search_indices: false, allow_view: true, allow_fine_tuning: false, organization: '*', group: null, is_blocking: false }],
-        });
-        seen.add(modelName);
-      }
+  const entry = (id, ownedBy) => models.push({
+    id,
+    object: 'model',
+    created: Math.floor(Date.now() / 1000),
+    owned_by: ownedBy,
+    permission: [{ id: `modelperm-${id}`, allow_create_engine: false, allow_sampling: true, allow_logprobs: true, allow_search_indices: false, allow_view: true, allow_fine_tuning: false, organization: '*', group: null, is_blocking: false }],
+  });
 
-      // Each alias as a separate entry
-      for (const alias of model.aliases || []) {
-        if (!seen.has(alias)) {
-          models.push({
-            id: alias,
-            object: 'model',
-            created: Math.floor(Date.now() / 1000),
-            owned_by: providerName,
-            permission: [{ id: `modelperm-${alias}`, allow_create_engine: false, allow_sampling: true, allow_logprobs: true, allow_search_indices: false, allow_view: true, allow_fine_tuning: false, organization: '*', group: null, is_blocking: false }],
-          });
-          seen.add(alias);
-        }
-      }
+  // The literal "default" — resolves to the default provider's default model
+  entry('default', 'abproxy');
 
-      // Also list the realModel name so agents that use the upstream ID directly work
-      if (model.realModel && !seen.has(model.realModel)) {
-        models.push({
-          id: model.realModel,
-          object: 'model',
-          created: Math.floor(Date.now() / 1000),
-          owned_by: providerName,
-          permission: [{ id: `modelperm-${model.realModel}`, allow_create_engine: false, allow_sampling: true, allow_logprobs: true, allow_search_indices: false, allow_view: true, allow_fine_tuning: false, organization: '*', group: null, is_blocking: false }],
-        });
-        seen.add(model.realModel);
-      }
-    }
-  }
-
-  // Model groups as virtual models
-  for (const groupName of Object.keys(config.modelGroups || {})) {
-    if (!seen.has(groupName)) {
-      models.push({
-        id: groupName,
-        object: 'model',
-        created: Math.floor(Date.now() / 1000),
-        owned_by: 'abproxy-group',
-        permission: [{ id: `modelperm-${groupName}`, allow_create_engine: false, allow_sampling: true, allow_logprobs: true, allow_search_indices: false, allow_view: true, allow_fine_tuning: false, organization: '*', group: null, is_blocking: false }],
-      });
-      seen.add(groupName);
-    }
+  // Every alias
+  for (const [aliasName, alias] of Object.entries(config.aliases || {})) {
+    entry(aliasName, alias.provider);
   }
 
   res.json({
@@ -158,37 +116,30 @@ export function handleGetModel(req, res) {
   const config = getConfig();
   const modelId = req.params.modelId;
 
-  // Search across all providers for this model ID (name, alias, or realModel)
-  for (const [providerName, provider] of Object.entries(config.providers)) {
-    for (const [modelName, model] of Object.entries(provider.models || {})) {
-      if (modelName === modelId ||
-          (model.aliases || []).includes(modelId) ||
-          model.realModel === modelId) {
-        return res.json({
-          id: modelId,
-          object: 'model',
-          created: Math.floor(Date.now() / 1000),
-          owned_by: providerName,
-          permission: [{ id: `modelperm-${modelId}`, allow_create_engine: false, allow_sampling: true, allow_logprobs: true, allow_search_indices: false, allow_view: true, allow_fine_tuning: false, organization: '*', group: null, is_blocking: false }],
-        });
-      }
-    }
+  if (modelId === 'default') {
+    return res.json({
+      id: 'default',
+      object: 'model',
+      created: Math.floor(Date.now() / 1000),
+      owned_by: 'abproxy',
+      permission: [{ id: 'modelperm-default', allow_create_engine: false, allow_sampling: true, allow_logprobs: true, allow_search_indices: false, allow_view: true, allow_fine_tuning: false, organization: '*', group: null, is_blocking: false }],
+    });
   }
 
-  // Check model groups
-  if (config.modelGroups && config.modelGroups[modelId]) {
+  const alias = (config.aliases || {})[modelId];
+  if (alias) {
     return res.json({
       id: modelId,
       object: 'model',
       created: Math.floor(Date.now() / 1000),
-      owned_by: 'abproxy-group',
+      owned_by: alias.provider,
       permission: [{ id: `modelperm-${modelId}`, allow_create_engine: false, allow_sampling: true, allow_logprobs: true, allow_search_indices: false, allow_view: true, allow_fine_tuning: false, organization: '*', group: null, is_blocking: false }],
     });
   }
 
   res.status(404).json({
     error: {
-      message: `Model '${modelId}' not found`,
+      message: `Model '${modelId}' not found. Available: alias names from /v1/models, or 'default'.`,
       type: 'invalid_request_error',
       code: 'model_not_found',
     },

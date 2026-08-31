@@ -59,26 +59,31 @@ fs.mkdirSync(configDir, { recursive: true });
 fs.writeFileSync(configFile, JSON.stringify({
   port: 19997,
   localApiKey: 'sk-local-dual-test',
-  defaultProvider: null,
+  defaultProvider: 'dual',
   defaultModel: null,
   providers: {
     dual: {
       aliases: [], type: 'openai-compatible',
       baseURL: 'http://localhost:19790',
       protocols: ['openai', 'anthropic'],
+      defaultModel: 'm1',
       autoFetch: false,
-      models: { 'm1': { realModel: 'real-m1', aliases: [] } },
+      models: { 'm1': { realModel: 'real-m1' } },
       accounts: [{ name: 'Default', apiKey: 'sk-dual-key', isDefault: true }],
     },
     oaiOnly: {
       aliases: [], type: 'openai-compatible',
       baseURL: 'http://localhost:19790',
+      defaultModel: 'm2',
       autoFetch: false,
-      models: { 'm2': { realModel: 'real-m2', aliases: [] } },
+      models: { 'm2': { realModel: 'real-m2' } },
       accounts: [{ name: 'Default', apiKey: 'sk-oai-key', isDefault: true }],
     },
   },
-  modelGroups: {},
+  aliases: {
+    'dual/m1': { provider: 'dual', model: 'm1' },
+    'oaiOnly/m2': { provider: 'oaiOnly', model: 'm2' },
+  },
 }, null, 2));
 
 const { validateConfig } = await import('../src/config/schema.js');
@@ -123,7 +128,7 @@ const antResp = await fetch('http://localhost:19997/v1/messages', {
   method: 'POST',
   headers: { ...LOCAL, 'x-api-key': 'sk-local-dual-test' },
   body: JSON.stringify({
-    model: 'm1', max_tokens: 64, system: 'be brief',
+    model: 'dual/m1', max_tokens: 64, system: 'be brief',
     messages: [{ role: 'user', content: 'hi' }],
   }),
 });
@@ -141,7 +146,7 @@ console.log('OK 4. Anthropic client → dual provider → native /v1/messages wi
 const oaiResp = await fetch('http://localhost:19997/v1/chat/completions', {
   method: 'POST',
   headers: LOCAL,
-  body: JSON.stringify({ model: 'm1', messages: [{ role: 'user', content: 'hi' }] }),
+  body: JSON.stringify({ model: 'dual/m1', messages: [{ role: 'user', content: 'hi' }] }),
 });
 assert.equal(oaiResp.status, 200);
 const oaiJson = await oaiResp.json();
@@ -156,7 +161,7 @@ const xResp = await fetch('http://localhost:19997/v1/messages', {
   method: 'POST',
   headers: { ...LOCAL, 'x-api-key': 'sk-local-dual-test' },
   body: JSON.stringify({
-    model: 'm2', max_tokens: 64,
+    model: 'oaiOnly/m2', max_tokens: 64,
     messages: [{ role: 'user', content: 'hi' }],
   }),
 });

@@ -173,7 +173,7 @@ export function registerDaemonCommands(program) {
       console.log(`  ${chalk.gray('Endpoint:')}  ${chalk.white(`http://localhost:${config.port}`)}`);
       console.log(`  ${chalk.gray('Default:')}   ${formatDefaultModel(config) ? chalk.white(formatDefaultModel(config)) : chalk.gray('not set')}`);
       console.log(`  ${chalk.gray('Providers:')} ${chalk.white(Object.keys(config.providers).length)}`);
-      console.log(`  ${chalk.gray('Groups:')}    ${chalk.white(Object.keys(config.modelGroups).length)}`);
+      console.log(`  ${chalk.gray('Aliases:')}  ${chalk.white(Object.keys(config.aliases || {}).length)}`);
       console.log(`  ${chalk.gray('API key:')}   ${chalk.gray(config.localApiKey.substring(0, 12) + '...')}`);
 
       // If running, try to fetch /health from the server
