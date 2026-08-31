@@ -11,6 +11,9 @@ import {
   resolveProviderName,
   getConfig,
   addModel,
+  editAccount,
+  getActiveApiKey,
+  getActiveAccountName,
   importFetchedModels,
   syncProviderModels,
 } from '../config/manager.js';
@@ -114,18 +117,23 @@ export function registerProviderCommands(program) {
           chalk.cyan('Base URL'),
           chalk.cyan('Aliases'),
           chalk.cyan('Models'),
+          chalk.cyan('Accounts'),
+          chalk.cyan('Active Account'),
         ],
         style: { head: [], border: ['gray'] },
       });
 
       for (const [name, p] of entries) {
         const modelCount = Object.keys(p.models || {}).length;
+        const accountCount = (p.accounts || []).length;
         table.push([
           chalk.white.bold(name),
           p.type === 'anthropic-native' ? chalk.magenta(p.type) : chalk.blue(p.type),
           chalk.gray(p.baseURL),
           (p.aliases || []).join(', ') || chalk.gray('—'),
           chalk.yellow(modelCount.toString()),
+          chalk.yellow(accountCount.toString()),
+          accountCount > 0 ? chalk.green(getActiveAccountName(p)) : chalk.gray('—'),
         ]);
       }
 
@@ -155,14 +163,22 @@ export function registerProviderCommands(program) {
           default: existing.type,
         });
         const baseURL = await input({ message: 'Base URL:', default: existing.baseURL });
-        const apiKey = await input({ message: 'API key:', default: existing.apiKey });
+        const apiKey = await input({
+          message: `API key (account "${getActiveAccountName(existing)}"):`,
+          default: getActiveApiKey(existing),
+        });
         const aliasStr = await input({
           message: 'Aliases (comma-separated):',
           default: (existing.aliases || []).join(', '),
         });
         const aliases = aliasStr ? aliasStr.split(',').map(a => a.trim()).filter(Boolean) : [];
 
-        editProvider(resolvedName, { type, baseURL, apiKey, aliases });
+        editProvider(resolvedName, { type, baseURL, aliases });
+
+        // Write the key back to the active account (multi-account aware)
+        if (apiKey && apiKey !== getActiveApiKey(existing)) {
+          editAccount(resolvedName, getActiveAccountName(existing), { apiKey });
+        }
         console.log(chalk.green(`\n✔ Provider "${resolvedName}" updated`));
       } catch (err) {
         if (err.name === 'ExitPromptError') return;

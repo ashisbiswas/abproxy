@@ -84,24 +84,24 @@ export async function testModel(modelRef) {
     const latencyMs = Date.now() - startTime;
 
     if (!response.ok) {
-      const body = await response.text();
+      const responseBody = await response.text();
       return {
         success: false,
         latencyMs,
-        error: `HTTP ${response.status}: ${body.substring(0, 200)}`,
+        error: `HTTP ${response.status}: ${responseBody.substring(0, 200)}`,
         provider: providerName,
         model: modelName,
       };
     }
 
-    const body = await response.json();
+    const responseBody = await response.json();
     return {
       success: true,
       latencyMs,
       provider: providerName,
       model: modelName,
       realModel: model.realModel,
-      response: body,
+      response: responseBody,
     };
   } catch (err) {
     const latencyMs = Date.now() - startTime;

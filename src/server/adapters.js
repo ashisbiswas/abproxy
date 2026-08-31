@@ -6,6 +6,8 @@
  * - Client sends Anthropic format → upstream is OpenAI → adapt request + adapt response back
  */
 
+import { getActiveApiKey } from '../config/manager.js';
+
 // ─── Request Adaptation ─────────────────────────────────────────────
 
 /**
@@ -330,12 +332,15 @@ export function buildUpstreamHeaders(provider, isStream, clientHeaders = {}) {
     'Content-Type': 'application/json',
   };
 
+  // Multi-account: use the provider's active (default) account key
+  const apiKey = getActiveApiKey(provider);
+
   if (provider.type === 'anthropic-native') {
-    headers['x-api-key'] = provider.apiKey;
+    headers['x-api-key'] = apiKey;
     // Use client's anthropic-version if provided, otherwise default
     headers['anthropic-version'] = clientHeaders['anthropic-version'] || '2023-06-01';
   } else {
-    headers['Authorization'] = `Bearer ${provider.apiKey}`;
+    headers['Authorization'] = `Bearer ${apiKey}`;
   }
 
   // Include any custom headers from provider config

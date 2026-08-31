@@ -7,6 +7,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { getActiveApiKey } from '../config/manager.js';
 
 // ─── In-memory cache ────────────────────────────────────────────────
 const cache = new Map();       // providerName → { data, fetchedAt }
@@ -128,14 +129,18 @@ function buildFetchHeaders(provider) {
     'Content-Type': 'application/json',
   };
 
+  // Works for both saved providers (accounts[]) and unsaved provider drafts
+  // passed in during `provider add` (legacy `apiKey` field).
+  const apiKey = getActiveApiKey(provider);
+
   if (provider.type === 'anthropic-native') {
     // Try both auth methods — x-api-key is primary for Anthropic,
     // but also include Bearer for proxy providers that accept either
-    headers['x-api-key'] = provider.apiKey;
+    headers['x-api-key'] = apiKey;
     headers['anthropic-version'] = '2023-06-01';
-    headers['Authorization'] = `Bearer ${provider.apiKey}`;
+    headers['Authorization'] = `Bearer ${apiKey}`;
   } else {
-    headers['Authorization'] = `Bearer ${provider.apiKey}`;
+    headers['Authorization'] = `Bearer ${apiKey}`;
   }
 
   // Include any custom headers from provider config

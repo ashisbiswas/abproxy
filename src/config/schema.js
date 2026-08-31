@@ -14,7 +14,27 @@ export function createDefaultConfig() {
 }
 
 /**
- * Validate a provider object structure
+ * Validate a single account object
+ */
+export function validateAccount(account) {
+  const errors = [];
+
+  if (!account.name || typeof account.name !== 'string') {
+    errors.push('Account name is required and must be a string');
+  }
+  if (!account.apiKey || typeof account.apiKey !== 'string') {
+    errors.push('Account apiKey is required and must be a string');
+  }
+  if (account.isDefault !== undefined && typeof account.isDefault !== 'boolean') {
+    errors.push('Account isDefault must be a boolean');
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Validate a provider object structure.
+ * Supports both legacy (apiKey) and new (accounts[]) formats.
  */
 export function validateProvider(provider) {
   const errors = [];
@@ -25,9 +45,28 @@ export function validateProvider(provider) {
   if (!provider.baseURL || typeof provider.baseURL !== 'string') {
     errors.push('Provider baseURL is required and must be a string');
   }
-  if (!provider.apiKey || typeof provider.apiKey !== 'string') {
-    errors.push('Provider apiKey is required and must be a string');
+
+  // Must have either accounts[] or legacy apiKey
+  const hasAccounts = Array.isArray(provider.accounts) && provider.accounts.length > 0;
+  const hasApiKey = provider.apiKey && typeof provider.apiKey === 'string';
+
+  if (!hasAccounts && !hasApiKey) {
+    errors.push('Provider must have at least one account or an apiKey');
   }
+
+  if (hasAccounts) {
+    const defaultCount = provider.accounts.filter(a => a.isDefault).length;
+    if (defaultCount > 1) {
+      errors.push('Only one account can be marked as default');
+    }
+    for (let i = 0; i < provider.accounts.length; i++) {
+      const result = validateAccount(provider.accounts[i]);
+      if (!result.valid) {
+        errors.push(...result.errors.map(e => `Account[${i}] "${provider.accounts[i].name || '?'}": ${e}`));
+      }
+    }
+  }
+
   if (provider.aliases && !Array.isArray(provider.aliases)) {
     errors.push('Provider aliases must be an array');
   }
@@ -42,6 +81,21 @@ export function validateProvider(provider) {
   }
 
   return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Migrate a legacy provider (single apiKey) to the new accounts[] format.
+ * Returns true if migration was performed.
+ */
+export function migrateProvider(provider) {
+  if (provider.apiKey && (!provider.accounts || provider.accounts.length === 0)) {
+    provider.accounts = [
+      { name: 'Default', apiKey: provider.apiKey, isDefault: true },
+    ];
+    delete provider.apiKey;
+    return true;
+  }
+  return false;
 }
 
 /**

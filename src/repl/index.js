@@ -1,7 +1,7 @@
 import readline from 'node:readline';
 import chalk from 'chalk';
 import { showBanner } from './banner.js';
-import { commands, matchCommand, showCommandPicker } from './commands.js';
+import { commands, matchCommand, showMainMenu } from './commands.js';
 import { ensureConfig } from '../config/manager.js';
 
 const orange = chalk.hex('#FF8C00');
@@ -155,11 +155,11 @@ export async function startRepl() {
       return;
     }
 
-    // ── `/` on empty buffer → instant command picker ────────────
+    // ── `/` on empty buffer → instant main menu ─────────────────
     if (str === '/' && inputBuffer.length === 0) {
       process.stdout.write('/\n');
       inputBuffer = '';
-      await runWithPromptMode(() => showCommandPicker());
+      await runWithPromptMode(() => showMainMenu());
       return;
     }
 

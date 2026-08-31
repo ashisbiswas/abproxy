@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { createDefaultConfig, validateConfig } from './schema.js';
+import { createDefaultConfig, validateConfig, migrateProvider } from './schema.js';
 import { logger } from '../utils/logger.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.abproxy');
@@ -24,14 +24,27 @@ export function ensureConfig() {
 }
 
 /**
- * Read config from disk
+ * Read config from disk. Automatically migrates legacy providers.
  */
 export function getConfig() {
   if (!fs.existsSync(CONFIG_FILE)) {
     return ensureConfig();
   }
   const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
-  return JSON.parse(raw);
+  const config = JSON.parse(raw);
+
+  // Auto-migrate legacy providers (single apiKey → accounts[])
+  let migrated = false;
+  for (const [, provider] of Object.entries(config.providers || {})) {
+    if (migrateProvider(provider)) {
+      migrated = true;
+    }
+  }
+  if (migrated) {
+    saveConfig(config);
+  }
+
+  return config;
 }
 
 /**
@@ -51,6 +64,33 @@ export function getConfigPath() {
   return CONFIG_FILE;
 }
 
+// ─── Active API Key Helper ──────────────────────────────────────────
+
+/**
+ * Get the active API key for a provider.
+ * Returns the default account's key, or the first account's key if none is default.
+ * Falls back to legacy apiKey field if no accounts exist.
+ */
+export function getActiveApiKey(provider) {
+  if (provider.accounts && provider.accounts.length > 0) {
+    const defaultAccount = provider.accounts.find(a => a.isDefault);
+    return defaultAccount ? defaultAccount.apiKey : provider.accounts[0].apiKey;
+  }
+  // Legacy fallback
+  return provider.apiKey || '';
+}
+
+/**
+ * Get the active account name for a provider.
+ */
+export function getActiveAccountName(provider) {
+  if (provider.accounts && provider.accounts.length > 0) {
+    const defaultAccount = provider.accounts.find(a => a.isDefault);
+    return defaultAccount ? defaultAccount.name : provider.accounts[0].name;
+  }
+  return 'Default';
+}
+
 // ─── Provider CRUD ───────────────────────────────────────────────────
 
 export function addProvider(name, provider) {
@@ -58,15 +98,28 @@ export function addProvider(name, provider) {
   if (config.providers[name]) {
     throw new Error(`Provider "${name}" already exists`);
   }
-  config.providers[name] = {
+
+  const providerData = {
     aliases: provider.aliases || [],
     type: provider.type,
     baseURL: provider.baseURL,
-    apiKey: provider.apiKey,
     models: provider.models || {},
     autoFetch: provider.autoFetch !== undefined ? provider.autoFetch : true,
     ...(provider.headers ? { headers: provider.headers } : {}),
   };
+
+  // Use accounts array if provided, otherwise create from single apiKey
+  if (provider.accounts && provider.accounts.length > 0) {
+    providerData.accounts = provider.accounts;
+  } else if (provider.apiKey) {
+    providerData.accounts = [
+      { name: 'Default', apiKey: provider.apiKey, isDefault: true },
+    ];
+  } else {
+    providerData.accounts = [];
+  }
+
+  config.providers[name] = providerData;
   saveConfig(config);
   return config;
 }
@@ -111,6 +164,135 @@ export function getProvider(name) {
 export function listProviders() {
   const config = getConfig();
   return config.providers;
+}
+
+// ─── Account CRUD ────────────────────────────────────────────────────
+
+/**
+ * Add an account to a provider
+ */
+export function addAccount(providerName, account) {
+  const config = getConfig();
+  const resolvedName = resolveProviderName(config, providerName);
+  if (!resolvedName) {
+    throw new Error(`Provider "${providerName}" not found`);
+  }
+  const provider = config.providers[resolvedName];
+
+  if (!provider.accounts) {
+    provider.accounts = [];
+  }
+
+  // Check for duplicate name
+  if (provider.accounts.some(a => a.name === account.name)) {
+    throw new Error(`Account "${account.name}" already exists on provider "${resolvedName}"`);
+  }
+
+  // If this is the first account or explicitly default, set as default
+  const isDefault = provider.accounts.length === 0 || !!account.isDefault;
+  if (isDefault) {
+    // Clear other defaults
+    for (const a of provider.accounts) {
+      a.isDefault = false;
+    }
+  }
+
+  provider.accounts.push({
+    name: account.name,
+    apiKey: account.apiKey,
+    isDefault,
+  });
+
+  saveConfig(config);
+  return config;
+}
+
+/**
+ * Edit an account on a provider
+ */
+export function editAccount(providerName, accountName, updates) {
+  const config = getConfig();
+  const resolvedName = resolveProviderName(config, providerName);
+  if (!resolvedName) {
+    throw new Error(`Provider "${providerName}" not found`);
+  }
+  const provider = config.providers[resolvedName];
+  const account = (provider.accounts || []).find(a => a.name === accountName);
+  if (!account) {
+    throw new Error(`Account "${accountName}" not found on provider "${resolvedName}"`);
+  }
+
+  if (updates.name !== undefined) account.name = updates.name;
+  if (updates.apiKey !== undefined) account.apiKey = updates.apiKey;
+
+  saveConfig(config);
+  return config;
+}
+
+/**
+ * Delete an account from a provider
+ */
+export function deleteAccount(providerName, accountName) {
+  const config = getConfig();
+  const resolvedName = resolveProviderName(config, providerName);
+  if (!resolvedName) {
+    throw new Error(`Provider "${providerName}" not found`);
+  }
+  const provider = config.providers[resolvedName];
+
+  const idx = (provider.accounts || []).findIndex(a => a.name === accountName);
+  if (idx === -1) {
+    throw new Error(`Account "${accountName}" not found on provider "${resolvedName}"`);
+  }
+
+  const wasDefault = provider.accounts[idx].isDefault;
+  provider.accounts.splice(idx, 1);
+
+  // If we deleted the default, promote the first remaining account
+  if (wasDefault && provider.accounts.length > 0) {
+    provider.accounts[0].isDefault = true;
+  }
+
+  saveConfig(config);
+  return config;
+}
+
+/**
+ * Set the default account for a provider
+ */
+export function setDefaultAccount(providerName, accountName) {
+  const config = getConfig();
+  const resolvedName = resolveProviderName(config, providerName);
+  if (!resolvedName) {
+    throw new Error(`Provider "${providerName}" not found`);
+  }
+  const provider = config.providers[resolvedName];
+
+  const account = (provider.accounts || []).find(a => a.name === accountName);
+  if (!account) {
+    throw new Error(`Account "${accountName}" not found on provider "${resolvedName}"`);
+  }
+
+  // Clear all, then set the one
+  for (const a of provider.accounts) {
+    a.isDefault = false;
+  }
+  account.isDefault = true;
+
+  saveConfig(config);
+  return config;
+}
+
+/**
+ * List accounts for a provider
+ */
+export function listAccounts(providerName) {
+  const config = getConfig();
+  const resolvedName = resolveProviderName(config, providerName);
+  if (!resolvedName) {
+    throw new Error(`Provider "${providerName}" not found`);
+  }
+  return config.providers[resolvedName].accounts || [];
 }
 
 // ─── Model CRUD ──────────────────────────────────────────────────────
