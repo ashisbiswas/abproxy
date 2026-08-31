@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { getConfig, resolveProviderName, resolveModelAlias } from '../config/manager.js';
-import { buildUpstreamUrl, buildUpstreamHeaders } from '../server/adapters.js';
+import { buildUpstreamUrl, buildUpstreamHeaders, getSupportedProtocols } from '../server/adapters.js';
 
 /**
  * Test a provider by making a minimal completion request
@@ -57,11 +57,13 @@ export async function testModel(modelRef) {
   }
 
   const startTime = Date.now();
-  const url = buildUpstreamUrl(provider);
-  const headers = buildUpstreamHeaders(provider, false);
+  // Test over the provider's preferred protocol (first in `protocols`)
+  const protocol = getSupportedProtocols(provider)[0];
+  const url = buildUpstreamUrl(provider, protocol);
+  const headers = buildUpstreamHeaders(provider, false, {}, protocol);
 
-  // Build the appropriate request body based on provider type
-  const body = provider.type === 'anthropic-native'
+  // Build the appropriate request body based on the chosen protocol
+  const body = protocol === 'anthropic'
     ? {
         model: model.realModel,
         max_tokens: 10,

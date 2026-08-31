@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { getConfig } from '../config/manager.js';
+import { getConfig, getEffectiveDefaultModel } from '../config/manager.js';
 import { logger } from '../utils/logger.js';
 
 export function registerSetupCommands(program) {
@@ -79,11 +79,12 @@ export function registerSetupCommands(program) {
 
         // Merge-patch: only touch the abproxy provider entry
         opencodeConfig.provider = opencodeConfig.provider || {};
+        const defaultModel = getEffectiveDefaultModel(config);
         opencodeConfig.provider.abproxy = {
           name: 'abproxy',
           baseURL: baseURL,
           apiKey: config.localApiKey,
-          models: [config.defaultModel || 'default'],
+          models: [defaultModel ? defaultModel.modelName : 'default'],
         };
 
         fs.writeFileSync(configPath, JSON.stringify(opencodeConfig, null, 2));

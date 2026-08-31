@@ -24,6 +24,8 @@ abproxy start
 
 - **One local endpoint** (`http://localhost:1986`) for all your agents
 - **Multi-provider support** — Anthropic-native and OpenAI-compatible APIs
+- **Multi-account providers** — several API keys per provider, one active
+- **Default provider + per-provider default model** — requests without a model go to your default provider's default model (global default as fallback)
 - **Auto model discovery** — fetches available models from provider's `/v1/models` endpoint
 - **Same-model failover** — `opus-5` on provider1 rate-limits → auto-retry on provider2
 - **Protocol translation** — OpenAI ↔ Anthropic format conversion (request + streaming)
@@ -39,11 +41,17 @@ abproxy works as a drop-in proxy for any provider that exposes OpenAI-compatible
 | Provider | Base URL Pattern | Type |
 |---|---|---|
 | seekai.cc | `https://seekai.cc/v1` | OpenAI-compatible + Anthropic |
-| gorouter.app | `https://gorouter.app/v1` | OpenAI-compatible |
+| gorouter.app | `https://gorouter.app/v1` | OpenAI-compatible + Anthropic |
 | agentrouter.org | `https://agentrouter.org/v1` | OpenAI-compatible |
 | OpenAI | `https://api.openai.com/v1` | OpenAI-compatible |
 | Anthropic | `https://api.anthropic.com` | Anthropic-native |
 | Any OpenAI-compatible | `https://your-provider.com/v1` | OpenAI-compatible |
+
+### Dual-Protocol Providers
+
+Some upstreams (seekai.cc, gorouter.app) expose **both** endpoints — `/v1/chat/completions` (OpenAI, `Authorization: Bearer`) and `/v1/messages` (Anthropic, `x-api-key`). For these, set `protocols: ["openai", "anthropic"]` on the provider (asked during `provider add`, changeable via `provider edit`).
+
+Why it matters: when Claude Code sends an Anthropic-format request, abproxy forwards it **natively** to `/v1/messages` with `x-api-key` — no lossy OpenAI translation, so thinking blocks, tool_use, and cache_control survive intact. OpenAI-format clients still go to `/v1/chat/completions` with `Bearer`. If the upstream only supports one protocol, abproxy translates as before.
 
 ### Agent Configuration
 
@@ -92,6 +100,8 @@ abproxy provider edit <name>      # Edit provider
 abproxy provider delete <name>    # Delete + cascade
 abproxy provider test <name>      # Live ping test
 abproxy provider sync <name>      # Re-fetch models from upstream
+abproxy provider set-default <n>  # Default provider (no-model requests)
+abproxy provider default-model <n> [model]  # Per-provider default model
 ```
 
 ### Model Management
@@ -158,6 +168,20 @@ The `/v1/models` endpoint on abproxy itself lists every configured model by:
 
 This ensures agents like Claude Code, Codex, or opencode can find the model regardless of which name they use.
 
+### Default Model Resolution
+
+When a request omits the `model` field, abproxy resolves a default:
+
+1. **Default provider** (if set) — uses that provider's own default model. The request is pinned to the default provider; it never fails over to other providers.
+2. **Global default model** (fallback) — resolved through the normal name/alias/group chain, so failover groups still apply.
+
+```bash
+abproxy provider set-default seekai                    # default provider
+abproxy provider default-model seekai claude-opus-5    # its default model
+```
+
+The REPL equivalents are `Providers → Set Default Provider` and `Providers → Set Default Model`.
+
 ## Config Example
 
 ```json
@@ -172,6 +196,7 @@ This ensures agents like Claude Code, Codex, or opencode can find the model rega
       "baseURL": "https://seekai.cc/v1",
       "apiKey": "sk-your-key",
       "autoFetch": true,
+      "protocols": ["openai", "anthropic"],
       "models": {
         "claude-opus-4-8": {
           "realModel": "claude-opus-4-8",

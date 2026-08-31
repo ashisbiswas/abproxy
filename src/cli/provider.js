@@ -16,6 +16,9 @@ import {
   getActiveAccountName,
   importFetchedModels,
   syncProviderModels,
+  setDefaultProvider,
+  setProviderDefaultModel,
+  getProvider,
 } from '../config/manager.js';
 import { testProvider, formatTestResult } from '../utils/testing.js';
 import { fetchProviderModels } from '../server/models-fetcher.js';
@@ -42,12 +45,24 @@ export function registerProviderCommands(program) {
         const aliasStr = await input({ message: 'Aliases (comma-separated, or blank):' });
         const aliases = aliasStr ? aliasStr.split(',').map(a => a.trim()).filter(Boolean) : [];
 
-        const providerData = { type, baseURL, apiKey, aliases, models: {}, autoFetch: true };
+        // Dual-protocol detection (seekai.cc, gorouter.app, etc.)
+        let protocols;
+        if (type === 'anthropic-native') {
+          protocols = ['anthropic'];
+        } else {
+          const hasAnthropic = await confirm({
+            message: 'Does this provider ALSO support Anthropic /v1/messages? (docs with "x-api-key" header)',
+            default: false,
+          });
+          protocols = hasAnthropic ? ['openai', 'anthropic'] : ['openai'];
+        }
+
+        const providerData = { type, baseURL, apiKey, aliases, models: {}, autoFetch: true, protocols };
 
         // ── Try to auto-fetch models from the provider ──────────
         const spinner = ora('Fetching available models from provider...').start();
         const fetchedModels = await fetchProviderModels(
-          { type, baseURL, apiKey },
+          { type, baseURL, apiKey, protocols },
           { providerName: name, skipCache: true }
         );
         spinner.stop();
@@ -115,6 +130,7 @@ export function registerProviderCommands(program) {
           chalk.cyan('Name'),
           chalk.cyan('Type'),
           chalk.cyan('Base URL'),
+          chalk.cyan('Protocols'),
           chalk.cyan('Aliases'),
           chalk.cyan('Models'),
           chalk.cyan('Accounts'),
@@ -126,10 +142,14 @@ export function registerProviderCommands(program) {
       for (const [name, p] of entries) {
         const modelCount = Object.keys(p.models || {}).length;
         const accountCount = (p.accounts || []).length;
+        const supported = Array.isArray(p.protocols)
+          ? p.protocols
+          : [p.type === 'anthropic-native' ? 'anthropic' : 'openai'];
         table.push([
           chalk.white.bold(name),
           p.type === 'anthropic-native' ? chalk.magenta(p.type) : chalk.blue(p.type),
           chalk.gray(p.baseURL),
+          chalk.yellow(supported.join(' + ')),
           (p.aliases || []).join(', ') || chalk.gray('—'),
           chalk.yellow(modelCount.toString()),
           chalk.yellow(accountCount.toString()),
@@ -173,7 +193,27 @@ export function registerProviderCommands(program) {
         });
         const aliases = aliasStr ? aliasStr.split(',').map(a => a.trim()).filter(Boolean) : [];
 
-        editProvider(resolvedName, { type, baseURL, aliases });
+        // Protocols (dual-protocol support)
+        const currentProtocols = Array.isArray(existing.protocols)
+          ? existing.protocols
+          : [existing.type === 'anthropic-native' ? 'anthropic' : 'openai'];
+        const protocols = await select({
+          message: 'Supported protocols:',
+          default: currentProtocols.length === 2 ? 'both' : currentProtocols[0],
+          choices: [
+            { name: 'OpenAI only  (/v1/chat/completions, Bearer)', value: 'openai' },
+            { name: 'Anthropic only  (/v1/messages, x-api-key)', value: 'anthropic' },
+            { name: 'Both (dual-protocol)', value: 'both' },
+          ],
+          loop: false,
+        });
+
+        editProvider(resolvedName, {
+          type, baseURL, aliases,
+          ...(protocols === 'both'
+            ? { protocols: ['openai', 'anthropic'] }
+            : { protocols: [protocols] }),
+        });
 
         // Write the key back to the active account (multi-account aware)
         if (apiKey && apiKey !== getActiveApiKey(existing)) {
@@ -291,6 +331,64 @@ export function registerProviderCommands(program) {
         const selectedModels = toAdd.map(id => ({ id }));
         const { added } = importFetchedModels(resolvedName, selectedModels);
         console.log(chalk.green(`\n  ✔ Imported ${added} new model(s) to "${resolvedName}"\n`));
+      } catch (err) {
+        if (err.name === 'ExitPromptError') return;
+        console.error(chalk.red(`✖ ${err.message}`));
+      }
+    });
+
+  // ─── provider set-default ──────────────────────────────────────
+  provider
+    .command('set-default <name>')
+    .description('Set the default provider (serves requests without a model)')
+    .action(async (name) => {
+      try {
+        setDefaultProvider(name);
+        const provider = getProvider(name);
+        console.log(chalk.green(`\n✔ Default provider set to "${name}"`));
+        if (provider.defaultModel) {
+          console.log(chalk.gray(`  Default model: ${provider.defaultModel}`));
+        } else {
+          console.log(chalk.yellow(`  ⚠ No default model set on "${name}" — set one with: abproxy provider default-model ${name} <model>`));
+        }
+      } catch (err) {
+        console.error(chalk.red(`✖ ${err.message}`));
+      }
+    });
+
+  // ─── provider default-model ────────────────────────────────────
+  provider
+    .command('default-model <name> [model]')
+    .description("Set a provider's own default model (used when it is the default provider)")
+    .action(async (name, modelRef) => {
+      try {
+        const config = getConfig();
+        const resolvedName = resolveProviderName(config, name);
+        if (!resolvedName) {
+          console.error(chalk.red(`✖ Provider "${name}" not found`));
+          return;
+        }
+        const provider = config.providers[resolvedName];
+        const modelNames = Object.keys(provider.models || {});
+
+        let modelName = modelRef;
+        if (!modelName) {
+          if (modelNames.length === 0) {
+            console.error(chalk.red(`✖ Provider "${resolvedName}" has no models`));
+            return;
+          }
+          modelName = await select({
+            message: `Default model for "${resolvedName}":`,
+            choices: modelNames.map(m => ({
+              name: `${m}${provider.defaultModel === m ? chalk.green(' ★ current') : ''}`,
+              value: m,
+            })),
+            loop: false,
+          });
+        }
+
+        setProviderDefaultModel(resolvedName, modelName);
+        console.log(chalk.green(`\n✔ Default model for "${resolvedName}": "${modelName}"`));
       } catch (err) {
         if (err.name === 'ExitPromptError') return;
         console.error(chalk.red(`✖ ${err.message}`));

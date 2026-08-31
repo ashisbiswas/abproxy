@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { getConfig } from '../config/manager.js';
+import { getConfig, formatDefaultModel } from '../config/manager.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -41,7 +41,7 @@ export function showBanner() {
     `    ${chalk.gray('Providers:')} ${chalk.white(Object.keys(config.providers).length)}`
   );
   console.log(
-    `  ${chalk.gray('Default:')}   ${config.defaultModel ? chalk.yellow(config.defaultModel) : chalk.gray('not set')}` +
+    `  ${chalk.gray('Default:')}   ${formatDefaultModel(config) ? chalk.yellow(formatDefaultModel(config)) : chalk.gray('not set')}` +
     `       ${chalk.gray('Groups:')}    ${chalk.white(Object.keys(config.modelGroups).length)}`
   );
   console.log(line);

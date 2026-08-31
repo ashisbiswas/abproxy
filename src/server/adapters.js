@@ -325,9 +325,31 @@ export function getRequestFormat(requestPath) {
 }
 
 /**
- * Build upstream request headers
+ * Which upstream protocols a provider speaks: ['openai'], ['anthropic'],
+ * or both. Derived from `type` unless overridden via `protocols` — e.g.
+ * seekai.cc / gorouter.app are OpenAI-compatible but ALSO expose the
+ * Anthropic-native /v1/messages endpoint.
+ *
+ * Order matters: the first entry is the provider's preferred protocol
+ * (used for model tests and when translation is required).
  */
-export function buildUpstreamHeaders(provider, isStream, clientHeaders = {}) {
+export function getSupportedProtocols(provider) {
+  if (Array.isArray(provider.protocols) && provider.protocols.length > 0) {
+    const filtered = provider.protocols.filter(p => p === 'openai' || p === 'anthropic');
+    if (filtered.length > 0) return filtered;
+  }
+  return [provider.type === 'anthropic-native' ? 'anthropic' : 'openai'];
+}
+
+/**
+ * Build upstream request headers
+ *
+ * @param {Object} provider
+ * @param {boolean} isStream
+ * @param {Object} clientHeaders
+ * @param {string} [protocol] - 'openai' | 'anthropic' (default: provider's preferred)
+ */
+export function buildUpstreamHeaders(provider, isStream, clientHeaders = {}, protocol = null) {
   const headers = {
     'Content-Type': 'application/json',
   };
@@ -335,7 +357,7 @@ export function buildUpstreamHeaders(provider, isStream, clientHeaders = {}) {
   // Multi-account: use the provider's active (default) account key
   const apiKey = getActiveApiKey(provider);
 
-  if (provider.type === 'anthropic-native') {
+  if ((protocol || getSupportedProtocols(provider)[0]) === 'anthropic') {
     headers['x-api-key'] = apiKey;
     // Use client's anthropic-version if provided, otherwise default
     headers['anthropic-version'] = clientHeaders['anthropic-version'] || '2023-06-01';
@@ -358,11 +380,15 @@ export function buildUpstreamHeaders(provider, isStream, clientHeaders = {}) {
  *   baseURL = "https://seekai.cc"           → .../v1/chat/completions or .../v1/messages
  *   baseURL = "https://api.openai.com/v1"   → .../v1/chat/completions
  *   baseURL = "https://provider.com/v1/"    → .../v1/chat/completions
+ *
+ * @param {Object} provider
+ * @param {string} [protocol] - 'openai' | 'anthropic' (default: provider's preferred)
  */
-export function buildUpstreamUrl(provider) {
+export function buildUpstreamUrl(provider, protocol = null) {
   const base = provider.baseURL.replace(/\/+$/, '');
+  const isAnthropic = (protocol || getSupportedProtocols(provider)[0]) === 'anthropic';
 
-  if (provider.type === 'anthropic-native') {
+  if (isAnthropic) {
     // For Anthropic-native: need /v1/messages
     if (/\/v1$/i.test(base)) {
       return `${base}/messages`;

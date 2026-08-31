@@ -91,6 +91,88 @@ export function getActiveAccountName(provider) {
   return 'Default';
 }
 
+// ─── Default Provider / Default Model ────────────────────────────────
+
+/**
+ * Set (or clear, with null) the global default provider.
+ * When set, requests without a model use this provider's defaultModel.
+ */
+export function setDefaultProvider(providerName) {
+  const config = getConfig();
+  if (providerName === null || providerName === undefined) {
+    config.defaultProvider = null;
+    saveConfig(config);
+    return config;
+  }
+  const resolvedName = resolveProviderName(config, providerName);
+  if (!resolvedName) {
+    throw new Error(`Provider "${providerName}" not found`);
+  }
+  config.defaultProvider = resolvedName;
+  saveConfig(config);
+  return config;
+}
+
+/**
+ * Set (or clear, with null) a provider's own default model.
+ * Used when this provider is the default provider, and for display.
+ */
+export function setProviderDefaultModel(providerName, modelName) {
+  const config = getConfig();
+  const resolvedName = resolveProviderName(config, providerName);
+  if (!resolvedName) {
+    throw new Error(`Provider "${providerName}" not found`);
+  }
+  const provider = config.providers[resolvedName];
+
+  if (modelName === null || modelName === undefined) {
+    delete provider.defaultModel;
+    saveConfig(config);
+    return config;
+  }
+
+  if (!provider.models || !provider.models[modelName]) {
+    throw new Error(`Model "${modelName}" not found on provider "${resolvedName}"`);
+  }
+  provider.defaultModel = modelName;
+  saveConfig(config);
+  return config;
+}
+
+/**
+ * Effective default model for requests that don't specify one.
+ *
+ * Priority:
+ *   1. defaultProvider + that provider's defaultModel (pinned to the provider)
+ *   2. Global defaultModel (resolved through the normal name/alias/group chain)
+ *
+ * Returns { providerName, modelName } — providerName is null for the global fallback,
+ * or null when no default is configured at all.
+ */
+export function getEffectiveDefaultModel(config) {
+  if (config.defaultProvider) {
+    const pName = resolveProviderName(config, config.defaultProvider) || config.defaultProvider;
+    const provider = config.providers[pName];
+    if (provider && provider.defaultModel && provider.models && provider.models[provider.defaultModel]) {
+      return { providerName: pName, modelName: provider.defaultModel };
+    }
+  }
+  if (config.defaultModel) {
+    return { providerName: null, modelName: config.defaultModel };
+  }
+  return null;
+}
+
+/**
+ * Formatted effective default for display: "provider › model", "model", or null.
+ * Note: the "provider › model" form is display-only — it is not a resolvable model id.
+ */
+export function formatDefaultModel(config) {
+  const def = getEffectiveDefaultModel(config);
+  if (!def) return null;
+  return def.providerName ? `${def.providerName} › ${def.modelName}` : def.modelName;
+}
+
 // ─── Provider CRUD ───────────────────────────────────────────────────
 
 export function addProvider(name, provider) {
@@ -143,6 +225,11 @@ export function deleteProvider(name) {
     throw new Error(`Provider "${name}" not found`);
   }
   delete config.providers[resolvedName];
+
+  // Clear the global default provider if it was this one
+  if (config.defaultProvider === resolvedName) {
+    config.defaultProvider = null;
+  }
 
   // Cascade: remove from model groups
   for (const [groupName, group] of Object.entries(config.modelGroups)) {
@@ -342,6 +429,11 @@ export function deleteModel(providerName, modelName) {
   }
   delete provider.models[modelName];
 
+  // Clear the provider default if it pointed at the deleted model
+  if (provider.defaultModel === modelName) {
+    delete provider.defaultModel;
+  }
+
   // Cascade: remove from model groups
   const memberKey = `${resolvedProvider}:${modelName}`;
   for (const [groupName, group] of Object.entries(config.modelGroups)) {
@@ -397,6 +489,7 @@ export function listModels(providerName = null) {
         realModel: model.realModel,
         aliases: model.aliases || [],
         isDefault: config.defaultModel === mName,
+        isProviderDefault: provider.defaultModel === mName,
       });
     }
   }

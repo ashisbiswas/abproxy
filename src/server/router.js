@@ -3,7 +3,7 @@
  */
 
 import express from 'express';
-import { getConfig } from '../config/manager.js';
+import { getConfig, formatDefaultModel } from '../config/manager.js';
 import { handleProxyRequest, handleListModels, handleGetModel } from './proxy.js';
 import { getAllHealth, getGlobalStats } from './health.js';
 import { logger } from '../utils/logger.js';
@@ -78,7 +78,7 @@ export function createRouter() {
       name: 'abproxy',
       version: '1.0.0',
       port: config.port,
-      defaultModel: config.defaultModel,
+      defaultModel: formatDefaultModel(config),
       providers: Object.keys(config.providers).length,
       groups: Object.keys(config.modelGroups).length,
     });

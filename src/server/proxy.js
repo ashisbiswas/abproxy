@@ -2,7 +2,7 @@
  * Core proxy handler — receives requests, resolves targets, and dispatches via failover.
  */
 
-import { getConfig } from '../config/manager.js';
+import { getConfig, getEffectiveDefaultModel } from '../config/manager.js';
 import { resolveTargets } from './resolver.js';
 import { executeWithFailover } from './failover.js';
 import { getRequestFormat } from './adapters.js';
@@ -16,9 +16,10 @@ export async function handleProxyRequest(req, res) {
   const clientFormat = getRequestFormat(req.path);
 
   try {
-    // Extract model from request body
+    // Extract model from request body; fall back to default provider / global default
     const body = req.body;
-    const requestModel = body.model || config.defaultModel;
+    const defaultRef = body.model ? null : getEffectiveDefaultModel(config);
+    const requestModel = body.model || defaultRef?.modelName || null;
 
     if (!requestModel) {
       return res.status(400).json({
@@ -31,8 +32,9 @@ export async function handleProxyRequest(req, res) {
 
     logger.server('info', `[request] ${req.method} ${req.path} model=${requestModel} stream=${!!body.stream}`);
 
-    // Resolve model to targets
-    const targets = resolveTargets(config, requestModel);
+    // Resolve model to targets — the resolver applies the same default chain
+    // (and pins to the default provider when the default comes from there)
+    const targets = resolveTargets(config, body.model);
 
     // Execute with failover
     const result = await executeWithFailover({

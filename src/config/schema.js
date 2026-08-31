@@ -7,6 +7,7 @@ export function createDefaultConfig() {
   return {
     port: 1986,
     localApiKey: `sk-local-${uuidv4().replace(/-/g, '')}`,
+    defaultProvider: null,
     defaultModel: null,
     providers: {},
     modelGroups: {},
@@ -72,6 +73,25 @@ export function validateProvider(provider) {
   }
   if (provider.models && typeof provider.models !== 'object') {
     errors.push('Provider models must be an object');
+  }
+  if (provider.defaultModel !== undefined && provider.defaultModel !== null && typeof provider.defaultModel !== 'string') {
+    errors.push('Provider defaultModel must be a string');
+  }
+  if (provider.protocols !== undefined) {
+    const valid = ['openai', 'anthropic'];
+    if (!Array.isArray(provider.protocols) || provider.protocols.length === 0 ||
+        !provider.protocols.every(p => valid.includes(p))) {
+      errors.push('Provider protocols must be a non-empty array of "openai" and/or "anthropic"');
+    }
+  }
+  if (
+    provider.defaultModel &&
+    provider.models &&
+    typeof provider.models === 'object' &&
+    Object.keys(provider.models).length > 0 &&
+    !provider.models[provider.defaultModel]
+  ) {
+    errors.push(`Provider defaultModel "${provider.defaultModel}" is not a configured model`);
   }
   if (provider.autoFetch !== undefined && typeof provider.autoFetch !== 'boolean') {
     errors.push('Provider autoFetch must be a boolean');
@@ -148,6 +168,15 @@ export function validateConfig(config) {
   }
   if (!config.localApiKey || typeof config.localApiKey !== 'string') {
     errors.push('localApiKey is required');
+  }
+  if (config.defaultProvider !== undefined && config.defaultProvider !== null && typeof config.defaultProvider !== 'string') {
+    errors.push('defaultProvider must be a string');
+  }
+  if (config.defaultProvider && config.providers && !config.providers[config.defaultProvider]) {
+    errors.push(`defaultProvider "${config.defaultProvider}" does not match any configured provider`);
+  }
+  if (config.defaultModel !== undefined && config.defaultModel !== null && typeof config.defaultModel !== 'string') {
+    errors.push('defaultModel must be a string');
   }
   if (typeof config.providers !== 'object') {
     errors.push('providers must be an object');

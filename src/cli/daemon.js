@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
-import { getConfig } from '../config/manager.js';
+import { getConfig, formatDefaultModel } from '../config/manager.js';
 import { logger } from '../utils/logger.js';
 
 const PID_FILE = path.join(os.homedir(), '.abproxy', 'daemon.pid');
@@ -171,7 +171,7 @@ export function registerDaemonCommands(program) {
       );
       console.log(`  ${chalk.gray('Port:')}      ${chalk.white(config.port)}`);
       console.log(`  ${chalk.gray('Endpoint:')}  ${chalk.white(`http://localhost:${config.port}`)}`);
-      console.log(`  ${chalk.gray('Default:')}   ${config.defaultModel ? chalk.white(config.defaultModel) : chalk.gray('not set')}`);
+      console.log(`  ${chalk.gray('Default:')}   ${formatDefaultModel(config) ? chalk.white(formatDefaultModel(config)) : chalk.gray('not set')}`);
       console.log(`  ${chalk.gray('Providers:')} ${chalk.white(Object.keys(config.providers).length)}`);
       console.log(`  ${chalk.gray('Groups:')}    ${chalk.white(Object.keys(config.modelGroups).length)}`);
       console.log(`  ${chalk.gray('API key:')}   ${chalk.gray(config.localApiKey.substring(0, 12) + '...')}`);

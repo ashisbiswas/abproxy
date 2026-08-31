@@ -13,6 +13,7 @@ import {
   getRequestFormat,
   buildUpstreamHeaders,
   buildUpstreamUrl,
+  getSupportedProtocols,
 } from './adapters.js';
 import { logger } from '../utils/logger.js';
 
@@ -90,7 +91,11 @@ export async function executeWithFailover({ targets, body, clientFormat, request
  * Forward a single request to one target provider
  */
 async function forwardRequest({ target, body, clientFormat, requestModel, isStream, res, clientHeaders = {} }) {
-  const providerFormat = target.provider.type === 'anthropic-native' ? 'anthropic' : 'openai';
+  const supported = getSupportedProtocols(target.provider);
+  // Speak the client's protocol when the upstream supports it — native
+  // passthrough, no lossy translation (thinking/tool_use/cache_control
+  // survive intact). Otherwise translate to the provider's preferred one.
+  const providerFormat = supported.includes(clientFormat) ? clientFormat : supported[0];
   const needsRequestAdapt = clientFormat !== providerFormat;
 
   // Adapt request body if needed
@@ -105,8 +110,8 @@ async function forwardRequest({ target, body, clientFormat, requestModel, isStre
     upstreamBody = { ...body, model: target.realModel };
   }
 
-  const url = buildUpstreamUrl(target.provider);
-  const headers = buildUpstreamHeaders(target.provider, isStream, clientHeaders);
+  const url = buildUpstreamUrl(target.provider, providerFormat);
+  const headers = buildUpstreamHeaders(target.provider, isStream, clientHeaders, providerFormat);
 
   logger.server('info', `[proxy] → ${target.providerName}:${target.modelName} (${url}) stream=${isStream}`);
 

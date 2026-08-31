@@ -4,23 +4,47 @@
  * an ordered list of { providerName, modelName, realModel, provider } targets.
  */
 
-import { resolveModelAlias, resolveProviderName } from '../config/manager.js';
+import { resolveModelAlias, resolveProviderName, getEffectiveDefaultModel } from '../config/manager.js';
 
 /**
  * Resolve a model identifier from a request to an ordered list of targets.
  *
  * Resolution order:
+ * 0. No model given → default provider's defaultModel (pinned to that provider),
+ *    else global defaultModel
  * 1. Check model groups — if the model name matches a group, return all members
  * 2. Check direct model name or alias across all providers
- * 3. If defaultModel is set and request model is empty, use that
+ * 3. If model matches "provider:model" format, resolve within that provider
+ * 4. Try matching by realModel name
  *
  * Returns: Array<{ providerName, modelName, realModel, provider }>
  */
 export function resolveTargets(config, requestModel) {
-  const model = requestModel || config.defaultModel;
+  let model = requestModel;
+  let pinnedProvider = null;
 
   if (!model) {
-    throw new Error('No model specified and no default model configured');
+    const def = getEffectiveDefaultModel(config);
+    if (!def) {
+      throw new Error('No model specified and no default model configured');
+    }
+    model = def.modelName;
+    pinnedProvider = def.providerName;
+  }
+
+  // Default-provider pinning: use exactly the default provider's default model
+  if (pinnedProvider) {
+    const provider = config.providers[pinnedProvider];
+    const modelObj = provider && provider.models ? provider.models[model] : null;
+    if (!modelObj) {
+      throw new Error(`Default model "${model}" not found on default provider "${pinnedProvider}"`);
+    }
+    return [{
+      providerName: pinnedProvider,
+      modelName: model,
+      realModel: modelObj.realModel,
+      provider,
+    }];
   }
 
   const targets = [];

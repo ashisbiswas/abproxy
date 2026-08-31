@@ -14,6 +14,11 @@ import {
   listAccounts,
   getActiveApiKey,
   getActiveAccountName,
+  getProvider,
+  setDefaultProvider,
+  setProviderDefaultModel,
+  getEffectiveDefaultModel,
+  formatDefaultModel,
   addModel,
   deleteModel,
   addModelAlias,
@@ -24,6 +29,7 @@ import {
   deleteGroup,
   listGroups,
   getConfig,
+  saveConfig,
   resolveProviderName,
   importFetchedModels,
   syncProviderModels,
@@ -96,7 +102,9 @@ async function pickModelOfProvider(providerName, message = 'Select model:') {
     message,
     choices: [
       ...models.map(m => ({
-        name: `${m.name} ${chalk.gray(`→ ${m.realModel}`)}${m.isDefault ? chalk.green(' ★') : ''}`,
+        name: `${m.name} ${chalk.gray(`→ ${m.realModel}`)}` +
+          `${m.isProviderDefault ? chalk.cyan(' ◆ default') : ''}` +
+          `${m.isDefault ? chalk.green(' ★ global') : ''}`,
         value: m.name,
       })),
       backChoice,
@@ -165,38 +173,43 @@ export function matchCommand(input) {
 
 /**
  * Top-level menu shown when the user presses `/`.
+ * Loops until the user picks Exit or Back, so sub-menus return here.
  */
 export async function showMainMenu() {
-  try {
-    const choice = await select({
-      message: 'abproxy menu:',
-      choices: [
-        { name: `${chalk.cyan('Providers'.padEnd(12))} ${chalk.gray('Add, edit, test providers & accounts')}`, value: 'providers' },
-        { name: `${chalk.cyan('Models'.padEnd(12))} ${chalk.gray('Add, delete, alias, test models')}`,        value: 'models' },
-        { name: `${chalk.cyan('Groups'.padEnd(12))} ${chalk.gray('Model groups for failover')}`,              value: 'groups' },
-        { name: `${chalk.cyan('Setup'.padEnd(12))} ${chalk.gray('Configure Claude Code / opencode / codex')}`, value: 'setup' },
-        { name: `${chalk.cyan('Config'.padEnd(12))} ${chalk.gray('Config path and local API key')}`,          value: 'config' },
-        { name: `${chalk.cyan('Help'.padEnd(12))} ${chalk.gray('Full command reference')}`,                   value: 'help' },
-        { name: `${chalk.cyan('Exit'.padEnd(12))} ${chalk.gray('Quit abproxy')}`,                             value: 'exit' },
-        backChoice,
-      ],
-      loop: false,
-      pageSize: 8,
-    });
+  while (true) {
+    let choice;
+    try {
+      choice = await select({
+        message: 'abproxy menu:',
+        choices: [
+          { name: `${chalk.cyan('Providers'.padEnd(12))} ${chalk.gray('Add, edit, test providers & accounts')}`, value: 'providers' },
+          { name: `${chalk.cyan('Models'.padEnd(12))} ${chalk.gray('Add, delete, alias, test models')}`,        value: 'models' },
+          { name: `${chalk.cyan('Groups'.padEnd(12))} ${chalk.gray('Model groups for failover')}`,              value: 'groups' },
+          { name: `${chalk.cyan('Setup'.padEnd(12))} ${chalk.gray('Configure Claude Code / opencode / codex')}`, value: 'setup' },
+          { name: `${chalk.cyan('Config'.padEnd(12))} ${chalk.gray('Config path and local API key')}`,          value: 'config' },
+          { name: `${chalk.cyan('Help'.padEnd(12))} ${chalk.gray('Full command reference')}`,                   value: 'help' },
+          { name: `${chalk.cyan('Exit'.padEnd(12))} ${chalk.gray('Quit abproxy')}`,                             value: 'exit' },
+          backChoice,
+        ],
+        loop: false,
+        pageSize: 8,
+      });
+    } catch (err) {
+      if (err.name === 'ExitPromptError') return;
+      console.error(chalk.red(`  ✖ ${err.message}`));
+      return;
+    }
 
     switch (choice) {
-      case 'providers': return showProviderMenu();
-      case 'models':    return showModelMenu();
-      case 'groups':    return showGroupMenu();
-      case 'setup':     return cmdSetup('');
-      case 'config':    return cmdConfig();
-      case 'help':      return cmdHelp();
+      case 'providers': await showProviderMenu(); break;
+      case 'models':    await showModelMenu(); break;
+      case 'groups':    await showGroupMenu(); break;
+      case 'setup':     await cmdSetup(''); break;
+      case 'config':    await cmdConfig(); break;
+      case 'help':      cmdHelp(); break;
       case 'exit':      return cmdExit();
-      default:          return;
+      default:          return; // Back → command prompt
     }
-  } catch (err) {
-    if (err.name === 'ExitPromptError') return;
-    console.error(chalk.red(`  ✖ ${err.message}`));
   }
 }
 
@@ -207,37 +220,48 @@ export const showCommandPicker = showMainMenu;
 
 // ─── Provider Menu ───────────────────────────────────────────────────
 
+/**
+ * Provider sub-menu. Loops until Back, which returns to the main menu.
+ */
 export async function showProviderMenu() {
-  try {
-    const choice = await select({
-      message: 'Providers:',
-      choices: [
-        { name: `${chalk.cyan('List Providers'.padEnd(20))} ${chalk.gray('Show providers table')}`,       value: 'list' },
-        { name: `${chalk.cyan('Add Provider'.padEnd(20))} ${chalk.gray('Interactive setup + accounts')}`, value: 'add' },
-        { name: `${chalk.cyan('Edit Provider'.padEnd(20))} ${chalk.gray('Type, base URL, aliases')}`,     value: 'edit' },
-        { name: `${chalk.cyan('Delete Provider'.padEnd(20))} ${chalk.gray('Remove provider + models')}`,  value: 'delete' },
-        { name: `${chalk.cyan('Test Provider'.padEnd(20))} ${chalk.gray('Live ping test')}`,              value: 'test' },
-        { name: `${chalk.cyan('Sync Models'.padEnd(20))} ${chalk.gray('Fetch models from upstream')}`,    value: 'sync' },
-        { name: `${chalk.cyan('Manage Accounts'.padEnd(20))} ${chalk.gray('Multiple API keys per provider')}`, value: 'accounts' },
-        backChoice,
-      ],
-      loop: false,
-      pageSize: 8,
-    });
+  while (true) {
+    let choice;
+    try {
+      choice = await select({
+        message: 'Providers:',
+        choices: [
+          { name: `${chalk.cyan('List Providers'.padEnd(20))} ${chalk.gray('Show providers table')}`,       value: 'list' },
+          { name: `${chalk.cyan('Add Provider'.padEnd(20))} ${chalk.gray('Interactive setup + accounts')}`, value: 'add' },
+          { name: `${chalk.cyan('Edit Provider'.padEnd(20))} ${chalk.gray('Type, base URL, aliases')}`,     value: 'edit' },
+          { name: `${chalk.cyan('Delete Provider'.padEnd(20))} ${chalk.gray('Remove provider + models')}`,  value: 'delete' },
+          { name: `${chalk.cyan('Test Provider'.padEnd(20))} ${chalk.gray('Live ping test')}`,              value: 'test' },
+          { name: `${chalk.cyan('Sync Models'.padEnd(20))} ${chalk.gray('Fetch models from upstream')}`,    value: 'sync' },
+          { name: `${chalk.cyan('Manage Accounts'.padEnd(20))} ${chalk.gray('Multiple API keys per provider')}`, value: 'accounts' },
+          { name: `${chalk.cyan('Set Default Model'.padEnd(20))} ${chalk.gray('Default model for one provider')}`, value: 'default-model' },
+          { name: `${chalk.cyan('Set Default Provider'.padEnd(20))} ${chalk.gray('Used when a request has no model')}`, value: 'default-provider' },
+          backChoice,
+        ],
+        loop: false,
+        pageSize: 10,
+      });
+    } catch (err) {
+      if (err.name === 'ExitPromptError') return;
+      console.error(chalk.red(`  ✖ ${err.message}`));
+      return;
+    }
 
     switch (choice) {
-      case 'list':     await cmdProviderList(); break;
-      case 'add':      await cmdProviderAdd(); break;
-      case 'edit':     await cmdProviderEdit(); break;
-      case 'delete':   await cmdProviderDelete(); break;
-      case 'test':     await cmdProviderTest(); break;
-      case 'sync':     await cmdProviderSync(); break;
-      case 'accounts': await showAccountMenu(); break;
-      default: return;
+      case 'list':             await cmdProviderList(); break;
+      case 'add':              await cmdProviderAdd(); break;
+      case 'edit':             await cmdProviderEdit(); break;
+      case 'delete':           await cmdProviderDelete(); break;
+      case 'test':             await cmdProviderTest(); break;
+      case 'sync':             await cmdProviderSync(); break;
+      case 'accounts':         await showAccountMenu(); break;
+      case 'default-model':    await cmdProviderSetDefaultModel(); break;
+      case 'default-provider': await cmdProviderSetDefaultProvider(); break;
+      default: return; // Back → main menu
     }
-  } catch (err) {
-    if (err.name === 'ExitPromptError') return;
-    console.error(chalk.red(`  ✖ ${err.message}`));
   }
 }
 
@@ -248,31 +272,42 @@ async function cmdProviderList() {
     console.log(chalk.yellow('\n  No providers configured. Use Providers → Add Provider\n'));
     return;
   }
+  const config = getConfig();
   const table = new Table({
     head: [
       chalk.cyan('Name'),
       chalk.cyan('Type'),
       chalk.cyan('Base URL'),
+      chalk.cyan('Protocols'),
       chalk.cyan('Aliases'),
       chalk.cyan('Models'),
       chalk.cyan('Accounts'),
       chalk.cyan('Active Account'),
+      chalk.cyan('Default Model'),
     ],
     style: { head: [], border: ['gray'] },
   });
   for (const [name, p] of entries) {
     const accountCount = (p.accounts || []).length;
+    const supported = Array.isArray(p.protocols)
+      ? p.protocols
+      : [p.type === 'anthropic-native' ? 'anthropic' : 'openai'];
     table.push([
-      chalk.white.bold(name),
+      config.defaultProvider === name
+        ? chalk.green('★ ') + chalk.white.bold(name)
+        : chalk.white.bold(name),
       p.type === 'anthropic-native' ? chalk.magenta(p.type) : chalk.blue(p.type),
       chalk.gray(p.baseURL),
+      chalk.yellow(supported.join(' + ')),
       (p.aliases || []).join(', ') || chalk.gray('—'),
       chalk.yellow(Object.keys(p.models || {}).length.toString()),
       chalk.yellow(accountCount.toString()),
       accountCount > 0 ? chalk.green(getActiveAccountName(p)) : chalk.gray('—'),
+      p.defaultModel ? chalk.cyan(p.defaultModel) : chalk.gray('—'),
     ]);
   }
   console.log('\n' + table.toString() + '\n');
+  console.log(chalk.gray('  ★ default provider    ◆ per-provider default model — see Providers → Set Default Model / Set Default Provider\n'));
 }
 
 
@@ -290,6 +325,19 @@ async function cmdProviderAdd() {
       ],
     });
     const baseURL = await input({ message: 'Base URL:' });
+
+    // Dual-protocol detection (e.g. seekai.cc, gorouter.app — OpenAI-compatible
+    // upstreams that ALSO expose the Anthropic-native /v1/messages endpoint)
+    let protocols;
+    if (type === 'anthropic-native') {
+      protocols = ['anthropic'];
+    } else {
+      const hasAnthropic = await confirm({
+        message: 'Does this provider ALSO support Anthropic /v1/messages? (curl docs with "x-api-key" header)',
+        default: false,
+      });
+      protocols = hasAnthropic ? ['openai', 'anthropic'] : ['openai'];
+    }
 
     // ── Collect one or more accounts ─────────────────────────────
     const accounts = [];
@@ -327,12 +375,12 @@ async function cmdProviderAdd() {
     }
 
     const aliases = parseList(await input({ message: 'Aliases (comma-separated, or blank):' }));
-    const providerData = { type, baseURL, aliases, accounts, models: {}, autoFetch: true };
+    const providerData = { type, baseURL, aliases, accounts, models: {}, autoFetch: true, protocols };
 
     // ── Auto-fetch models using the default account's key ────────
     const spinner = ora('Fetching available models from provider...').start();
     const fetchedModels = await fetchProviderModels(
-      { type, baseURL, accounts },
+      { type, baseURL, accounts, protocols },
       { providerName: name, skipCache: true }
     );
     spinner.stop();
@@ -396,7 +444,27 @@ async function cmdProviderEdit() {
       default: (existing.aliases || []).join(', '),
     }));
 
-    editProvider(resolved, { type, baseURL, aliases });
+    // Protocols (dual-protocol support)
+    const currentProtocols = Array.isArray(existing.protocols)
+      ? existing.protocols
+      : [existing.type === 'anthropic-native' ? 'anthropic' : 'openai'];
+    const protocols = await select({
+      message: 'Supported protocols:',
+      default: currentProtocols.length === 2 ? 'both' : currentProtocols[0],
+      choices: [
+        { name: 'OpenAI only  (/v1/chat/completions, Bearer)', value: 'openai' },
+        { name: 'Anthropic only  (/v1/messages, x-api-key)', value: 'anthropic' },
+        { name: 'Both (dual-protocol)', value: 'both' },
+      ],
+      loop: false,
+    });
+
+    editProvider(resolved, {
+      type, baseURL, aliases,
+      ...(protocols === 'both'
+        ? { protocols: ['openai', 'anthropic'] }
+        : { protocols: [protocols] }),
+    });
     console.log(chalk.green(`\n  ✔ Provider "${resolved}" updated`));
     console.log(chalk.gray('  API keys are managed under Providers → Manage Accounts\n'));
   });
@@ -480,23 +548,110 @@ async function cmdProviderSync() {
 }
 
 
-// ─── Account Menu ────────────────────────────────────────────────────
+// ─── Provider Defaults ───────────────────────────────────────────────
 
-export async function showAccountMenu() {
-  try {
-    const choice = await select({
-      message: 'Accounts:',
+/**
+ * Set a provider's own default model. Used when this provider serves a
+ * request without a model (i.e. it is the default provider), and for display.
+ */
+async function cmdProviderSetDefaultModel() {
+  return guard(async () => {
+    const providerName = await pickProvider('Set default model for provider:');
+    if (providerName === BACK) return;
+
+    const modelName = await pickModelOfProvider(providerName, 'Default model for this provider:');
+    if (modelName === BACK) return;
+
+    setProviderDefaultModel(providerName, modelName);
+    console.log(chalk.green(`\n  ✔ Default model for "${providerName}": "${modelName}"\n`));
+  });
+}
+
+/**
+ * Set the global default provider. When set, requests without a model are
+ * served by this provider using its default model.
+ */
+async function cmdProviderSetDefaultProvider() {
+  return guard(async () => {
+    const config = getConfig();
+    const providers = Object.keys(listProviders());
+    if (providers.length === 0) {
+      console.log(chalk.yellow('\n  No providers configured. Use Providers → Add Provider\n'));
+      return;
+    }
+
+    const name = await select({
+      message: 'Default provider (serves requests without a model):',
       choices: [
-        { name: `${chalk.cyan('List Accounts'.padEnd(22))} ${chalk.gray('Show accounts for a provider')}`, value: 'list' },
-        { name: `${chalk.cyan('Add Account'.padEnd(22))} ${chalk.gray('Add a name + API key')}`,           value: 'add' },
-        { name: `${chalk.cyan('Edit Account'.padEnd(22))} ${chalk.gray('Rename or replace the API key')}`, value: 'edit' },
-        { name: `${chalk.cyan('Delete Account'.padEnd(22))} ${chalk.gray('Remove an account')}`,           value: 'delete' },
-        { name: `${chalk.cyan('Set Default Account'.padEnd(22))} ${chalk.gray('Choose the active API key')}`, value: 'default' },
+        ...providers.map(p => ({
+          name: `${p}${config.defaultProvider === p ? chalk.green(' ★ current') : ''}`,
+          value: p,
+        })),
+        { name: chalk.gray('None — clear default provider'), value: null },
         backChoice,
       ],
       loop: false,
-      pageSize: 6,
     });
+    if (name === BACK) return;
+
+    setDefaultProvider(name);
+    if (name === null) {
+      console.log(chalk.gray('\n  Default provider cleared.\n'));
+      return;
+    }
+
+    console.log(chalk.green(`\n  ✔ Default provider: "${name}"`));
+
+    // A default provider is only useful with a default model — offer to pick one now
+    const provider = getProvider(name);
+    if (provider.defaultModel) {
+      console.log(chalk.gray(`  Its default model: ${provider.defaultModel}\n`));
+      return;
+    }
+    if (Object.keys(provider.models || {}).length === 0) {
+      console.log(chalk.yellow('  ⚠ This provider has no models yet — set one later via Providers → Set Default Model.\n'));
+      return;
+    }
+    const pickNow = await confirm({ message: 'Pick its default model now?', default: true });
+    if (pickNow) {
+      const modelName = await pickModelOfProvider(name, 'Default model for this provider:');
+      if (modelName === BACK) return;
+      setProviderDefaultModel(name, modelName);
+      console.log(chalk.green(`\n  ✔ Default model for "${name}": "${modelName}"\n`));
+    } else {
+      console.log(chalk.yellow('  ⚠ No default model set — requests without a model will fall back to the global default (if any).\n'));
+    }
+  });
+}
+
+
+// ─── Account Menu ────────────────────────────────────────────────────
+
+/**
+ * Account sub-menu. Loops until Back, which returns to the provider menu.
+ */
+export async function showAccountMenu() {
+  while (true) {
+    let choice;
+    try {
+      choice = await select({
+        message: 'Accounts:',
+        choices: [
+          { name: `${chalk.cyan('List Accounts'.padEnd(22))} ${chalk.gray('Show accounts for a provider')}`, value: 'list' },
+          { name: `${chalk.cyan('Add Account'.padEnd(22))} ${chalk.gray('Add a name + API key')}`,           value: 'add' },
+          { name: `${chalk.cyan('Edit Account'.padEnd(22))} ${chalk.gray('Rename or replace the API key')}`, value: 'edit' },
+          { name: `${chalk.cyan('Delete Account'.padEnd(22))} ${chalk.gray('Remove an account')}`,           value: 'delete' },
+          { name: `${chalk.cyan('Set Default Account'.padEnd(22))} ${chalk.gray('Choose the active API key')}`, value: 'default' },
+          backChoice,
+        ],
+        loop: false,
+        pageSize: 6,
+      });
+    } catch (err) {
+      if (err.name === 'ExitPromptError') return;
+      console.error(chalk.red(`  ✖ ${err.message}`));
+      return;
+    }
 
     switch (choice) {
       case 'list':    await cmdAccountList(); break;
@@ -504,11 +659,8 @@ export async function showAccountMenu() {
       case 'edit':    await cmdAccountEdit(); break;
       case 'delete':  await cmdAccountDelete(); break;
       case 'default': await cmdAccountSetDefault(); break;
-      default: return;
+      default: return; // Back → provider menu
     }
-  } catch (err) {
-    if (err.name === 'ExitPromptError') return;
-    console.error(chalk.red(`  ✖ ${err.message}`));
   }
 }
 
@@ -635,22 +787,32 @@ async function cmdAccountSetDefault() {
 
 // ─── Model Menu ──────────────────────────────────────────────────────
 
+/**
+ * Model sub-menu. Loops until Back, which returns to the main menu.
+ */
 export async function showModelMenu() {
-  try {
-    const choice = await select({
-      message: 'Models:',
-      choices: [
-        { name: `${chalk.cyan('List Models'.padEnd(20))} ${chalk.gray('Show models table')}`,               value: 'list' },
-        { name: `${chalk.cyan('Add Model'.padEnd(20))} ${chalk.gray('Add a model to a provider')}`,         value: 'add' },
-        { name: `${chalk.cyan('Delete Model'.padEnd(20))} ${chalk.gray('Pick provider → model → confirm')}`, value: 'delete' },
-        { name: `${chalk.cyan('Add Alias'.padEnd(20))} ${chalk.gray('Add an alias to a model')}`,           value: 'alias' },
-        { name: `${chalk.cyan('Set Default Model'.padEnd(20))} ${chalk.gray('Used when no model is given')}`, value: 'default' },
-        { name: `${chalk.cyan('Test Model'.padEnd(20))} ${chalk.gray('Live completion test')}`,             value: 'test' },
-        backChoice,
-      ],
-      loop: false,
-      pageSize: 7,
-    });
+  while (true) {
+    let choice;
+    try {
+      choice = await select({
+        message: 'Models:',
+        choices: [
+          { name: `${chalk.cyan('List Models'.padEnd(20))} ${chalk.gray('Show models table')}`,               value: 'list' },
+          { name: `${chalk.cyan('Add Model'.padEnd(20))} ${chalk.gray('Add a model to a provider')}`,         value: 'add' },
+          { name: `${chalk.cyan('Delete Model'.padEnd(20))} ${chalk.gray('Pick provider → model → confirm')}`, value: 'delete' },
+          { name: `${chalk.cyan('Add Alias'.padEnd(20))} ${chalk.gray('Add an alias to a model')}`,           value: 'alias' },
+          { name: `${chalk.cyan('Set Default Model'.padEnd(20))} ${chalk.gray('Global fallback default')}`,   value: 'default' },
+          { name: `${chalk.cyan('Test Model'.padEnd(20))} ${chalk.gray('Live completion test')}`,             value: 'test' },
+          backChoice,
+        ],
+        loop: false,
+        pageSize: 7,
+      });
+    } catch (err) {
+      if (err.name === 'ExitPromptError') return;
+      console.error(chalk.red(`  ✖ ${err.message}`));
+      return;
+    }
 
     switch (choice) {
       case 'list':    await cmdModelList(); break;
@@ -659,11 +821,8 @@ export async function showModelMenu() {
       case 'alias':   await cmdModelAlias(); break;
       case 'default': await cmdModelDefault(); break;
       case 'test':    await cmdModelTest(); break;
-      default: return;
+      default: return; // Back → main menu
     }
-  } catch (err) {
-    if (err.name === 'ExitPromptError') return;
-    console.error(chalk.red(`  ✖ ${err.message}`));
   }
 }
 
@@ -675,12 +834,16 @@ async function cmdModelList(args) {
     style: { head: [], border: ['gray'] },
   });
   for (const m of models) {
+    const flags = [
+      m.isProviderDefault ? chalk.cyan('◆ provider') : '',
+      m.isDefault ? chalk.green('★ global') : '',
+    ].filter(Boolean).join(' ');
     table.push([
       chalk.white.bold(m.name),
       chalk.gray(m.provider),
       chalk.blue(m.realModel),
       m.aliases.length > 0 ? m.aliases.join(', ') : chalk.gray('—'),
-      m.isDefault ? chalk.green('★') : chalk.gray('—'),
+      flags || chalk.gray('—'),
     ]);
   }
   console.log('\n' + table.toString() + '\n');
@@ -750,13 +913,19 @@ async function cmdModelDefault() {
     const models = listModels();
     if (models.length === 0) { console.log(chalk.yellow('  No models.')); return; }
 
+    console.log(chalk.gray('\n  This is the global fallback default. If a default provider is set, its own'));
+    console.log(chalk.gray('  default model takes priority (Providers → Set Default Provider).\n'));
+
     const modelName = await select({
-      message: 'Set default model:',
+      message: 'Set global default model:',
       choices: [
         ...models.map(m => ({
-          name: `${m.name} ${chalk.gray(`(${m.provider})`)}${m.isDefault ? chalk.green(' ★ current') : ''}`,
+          name: `${m.name} ${chalk.gray(`(${m.provider})`)}` +
+            `${m.isProviderDefault ? chalk.cyan(' ◆ provider default') : ''}` +
+            `${m.isDefault ? chalk.green(' ★ current') : ''}`,
           value: m.name,
         })),
+        { name: chalk.gray('None — clear global default'), value: null },
         backChoice,
       ],
       loop: false,
@@ -764,8 +933,16 @@ async function cmdModelDefault() {
     });
     if (modelName === BACK) return;
 
+    if (modelName === null) {
+      const config = getConfig();
+      config.defaultModel = null;
+      saveConfig(config);
+      console.log(chalk.gray('\n  Global default model cleared.\n'));
+      return;
+    }
+
     setDefaultModel(modelName);
-    console.log(chalk.green(`\n  ✔ Default model: "${modelName}"\n`));
+    console.log(chalk.green(`\n  ✔ Global default model: "${modelName}"\n`));
   });
 }
 
@@ -798,31 +975,38 @@ async function cmdModelTest() {
 
 // ─── Group Menu ──────────────────────────────────────────────────────
 
+/**
+ * Group sub-menu. Loops until Back, which returns to the main menu.
+ */
 export async function showGroupMenu() {
-  try {
-    const choice = await select({
-      message: 'Model groups:',
-      choices: [
-        { name: `${chalk.cyan('List Groups'.padEnd(16))} ${chalk.gray('Show groups table')}`,             value: 'list' },
-        { name: `${chalk.cyan('Add Group'.padEnd(16))} ${chalk.gray('Create a failover group')}`,         value: 'add' },
-        { name: `${chalk.cyan('Edit Group'.padEnd(16))} ${chalk.gray('Change members or strategy')}`,     value: 'edit' },
-        { name: `${chalk.cyan('Delete Group'.padEnd(16))} ${chalk.gray('Remove a group')}`,               value: 'delete' },
-        backChoice,
-      ],
-      loop: false,
-      pageSize: 5,
-    });
+  while (true) {
+    let choice;
+    try {
+      choice = await select({
+        message: 'Model groups:',
+        choices: [
+          { name: `${chalk.cyan('List Groups'.padEnd(16))} ${chalk.gray('Show groups table')}`,             value: 'list' },
+          { name: `${chalk.cyan('Add Group'.padEnd(16))} ${chalk.gray('Create a failover group')}`,         value: 'add' },
+          { name: `${chalk.cyan('Edit Group'.padEnd(16))} ${chalk.gray('Change members or strategy')}`,     value: 'edit' },
+          { name: `${chalk.cyan('Delete Group'.padEnd(16))} ${chalk.gray('Remove a group')}`,               value: 'delete' },
+          backChoice,
+        ],
+        loop: false,
+        pageSize: 5,
+      });
+    } catch (err) {
+      if (err.name === 'ExitPromptError') return;
+      console.error(chalk.red(`  ✖ ${err.message}`));
+      return;
+    }
 
     switch (choice) {
       case 'list':   await cmdGroupList(); break;
       case 'add':    await cmdGroupAdd(); break;
       case 'edit':   await cmdGroupEdit(); break;
       case 'delete': await cmdGroupDelete(); break;
-      default: return;
+      default: return; // Back → main menu
     }
-  } catch (err) {
-    if (err.name === 'ExitPromptError') return;
-    console.error(chalk.red(`  ✖ ${err.message}`));
   }
 }
 
@@ -1006,7 +1190,9 @@ async function cmdStatus() {
     console.log(`  ${chalk.gray('Server:')}    ${chalk.red('● not running')}`);
   }
   console.log(`  ${chalk.gray('Port:')}      ${chalk.white(config.port)}`);
-  console.log(`  ${chalk.gray('Default:')}   ${config.defaultModel ? chalk.yellow(config.defaultModel) : chalk.gray('not set')}`);
+  const effDefault = formatDefaultModel(config);
+  console.log(`  ${chalk.gray('Default:')}   ${effDefault ? chalk.yellow(effDefault) : chalk.gray('not set')}` +
+    (config.defaultProvider ? chalk.gray('  (default provider)') : ''));
   console.log('');
 }
 
@@ -1038,6 +1224,13 @@ function cmdHelp() {
   item('Test Provider', 'Live ping using the default account');
   item('Sync Models', 'Re-fetch /v1/models and import new ones');
   item('Manage Accounts', 'List/add/edit/delete accounts, set default');
+  item('Set Default Model', 'Per-provider default model (◆)');
+  item('Set Default Provider', 'Provider used when a request has no model');
+
+  section('Default model resolution');
+  item('1. Default provider', 'If set, its default model serves requests without a model');
+  item('2. Global default', 'Fallback when no default provider/model is set');
+  item('Models → Set Default', 'Sets the global fallback default');
 
   section('Models');
   item('List Models', 'Table of all models with aliases');

@@ -6,7 +6,7 @@
 import express from 'express';
 import { watch } from 'chokidar';
 import { createRouter } from './router.js';
-import { getConfig, getConfigPath, ensureConfig } from '../config/manager.js';
+import { getConfig, getConfigPath, ensureConfig, formatDefaultModel } from '../config/manager.js';
 import { resetHealth } from './health.js';
 import { logger } from '../utils/logger.js';
 
@@ -31,7 +31,7 @@ export async function startServer(configOverride = null) {
       logger.server('info', msg);
       console.log(`\n  🚀 ${msg}`);
       console.log(`  📋 API key: ${config.localApiKey.substring(0, 16)}...`);
-      console.log(`  🎯 Default model: ${config.defaultModel || 'not set'}`);
+      console.log(`  🎯 Default model: ${formatDefaultModel(config) || 'not set'}`);
       console.log(`  📡 Providers: ${Object.keys(config.providers).length}`);
       console.log(`  🔀 Groups: ${Object.keys(config.modelGroups).length}`);
       console.log('');
