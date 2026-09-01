@@ -1,8 +1,6 @@
 import chalk from 'chalk';
 import { getConfig, formatDefaultModel } from '../config/manager.js';
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
+import { listAgents, isServerAlive, findOrphanBackups } from '../agents/index.js';
 
 const VERSION = '1.0.0';
 
@@ -18,14 +16,14 @@ const LOGO = `
 const orange = chalk.hex('#FF8C00');
 
 /**
- * Display the startup banner
+ * Display the startup banner. Callers clear the screen first.
  */
-export function showBanner() {
+export async function showBanner() {
   console.log(orange(LOGO));
 
   const config = getConfig();
-  const pid = readDaemonPid();
-  const running = pid ? isProcessRunning(pid) : false;
+  const running = await isServerAlive();
+  const agents = listAgents(config);
 
   const boxWidth = 52;
   const line = chalk.gray('─'.repeat(boxWidth));
@@ -44,25 +42,29 @@ export function showBanner() {
     `  ${chalk.gray('Default:')}   ${formatDefaultModel(config) ? chalk.yellow(formatDefaultModel(config)) : chalk.gray('not set')}` +
     `       ${chalk.gray('Aliases:')}  ${chalk.white(Object.keys(config.aliases || {}).length)}`
   );
+
+  // Agent wrapper status
+  const wrapped = agents.filter(a => a.wrapped);
+  console.log(line);
+  if (wrapped.length > 0) {
+    const chips = wrapped
+      .map(a => `${chalk.white(a.label)} ${running ? chalk.green('● running') : chalk.yellow('○ set — server stopped')}`)
+      .join(chalk.gray('  ·  '));
+    console.log(`  ${chalk.gray('Wrappers:')}  ${chips}`);
+  } else {
+    console.log(`  ${chalk.gray('Wrappers:')}  ${chalk.gray('none — run /setup to point your agents at abproxy')}`);
+  }
+
+  // Leftover backups from a removed/previous install — restorable
+  const orphans = findOrphanBackups(config);
+  if (orphans.length > 0) {
+    console.log('');
+    for (const o of orphans) {
+      console.log(`  ${chalk.yellow('⚠ Backup found (wrapper not active):')} ${chalk.yellow(o.backupPath)}`);
+    }
+    console.log(`  ${chalk.gray('  Restore: /setup → agent → Stop wrapper, or: abproxy setup restore all')}`);
+  }
+
   console.log(line);
   console.log(chalk.gray(`  Type ${chalk.white('/')} for commands, ${chalk.white('/help')} for full reference\n`));
-}
-
-function readDaemonPid() {
-  try {
-    const pidFile = path.join(os.homedir(), '.abproxy', 'daemon.pid');
-    if (fs.existsSync(pidFile)) {
-      return parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10);
-    }
-  } catch {}
-  return null;
-}
-
-function isProcessRunning(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }

@@ -13,7 +13,10 @@ const PROMPT = orange('  abproxy') + chalk.gray(' › ');
  */
 export async function startRepl() {
   ensureConfig();
-  showBanner();
+  // Fresh screen — wipe whatever the shell printed before the banner.
+  // (console.clear() no-ops when stdout is not a TTY.)
+  console.clear();
+  await showBanner();
 
   let inputBuffer = '';
   let busy = false;

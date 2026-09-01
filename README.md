@@ -53,14 +53,87 @@ Aliases and defaults are **pinned to one provider** — requests never silently 
 - **Aliases as agent-visible model names** — pin any name to any provider/model
 - **Multi-provider** — Anthropic-native and OpenAI-compatible APIs
 - **Dual-protocol providers** — native passthrough when upstream supports the client's protocol
+- **OpenAI Responses API** (`/v1/responses`) — Codex CLI works out of the box, translated to any upstream
 - **Multi-account providers** — several API keys per provider, one active
 - **Automatic account rotation** — quota exhausted → next account, transparently
 - **Default provider + per-provider default model** — `default` just works
 - **Auto model discovery** — fetches available models from provider's `/v1/models`
 - **Config hot-reload** — edit config while server runs, changes apply instantly
-- **Agent setup wrappers** — `abproxy setup claude-code|opencode|codex`
+- **Free provider list** — curated free-tier gateway URLs (`/free`), add one as a provider with a few keystrokes
+- **Agent setup wrappers** — auto-detects Claude Code / opencode / codex, backs up their config, and points them at abproxy (with live wrapper status and one-keystroke restore)
 
-## Agent Configuration
+## Free Provider List
+
+`/free` (or main menu → Free Providers) shows a numbered list of curated free provider endpoints:
+
+```
+  Free provider list
+  ────────────────────────────────────────────────
+   1. TabiToken [openai]
+      https://tabitoken.com
+   2. GoRouter [openai + anthropic]
+      https://gorouter.app
+   ...
+```
+
+Pick a number and abproxy pre-fills the Add Provider flow (name, base URL, protocols) — you just supply the API key. The list lives in `src/data/free-providers.json`; edit it to add your own:
+
+```json
+{ "providers": [ { "name": "MyGateway", "url": "https://example.com", "protocols": ["openai"] } ] }
+```
+
+## Agent Wrappers
+
+```bash
+abproxy setup                 # interactive — lists only agents you actually have
+abproxy setup list            # table: detection, wrapper status, config paths
+abproxy setup claude-code     # wrap one agent directly
+abproxy setup restore all     # stop all wrappers, restore original configs
+```
+
+`abproxy setup` **detects what is installed first** and only offers those agents:
+
+| Agent | Detected via |
+|---|---|
+| Claude Code | `claude` on PATH, or `~/.claude` |
+| OpenCode | `opencode` on PATH, or `~/.config/opencode` |
+| Codex | `codex` on PATH, or `~/.codex` |
+
+### Wrapping an agent
+
+1. **Backup** — the original config is copied next to itself with `abproxy` appended: `~/.claude/settings.json` → `~/.claude/settings.json.abproxy.bak` (same for `~/.codex/config.toml` and the opencode config). The backup is created once and never overwritten, so the true original is always recoverable.
+2. **Patch** — the config is updated to route through abproxy:
+   - *Claude Code*: `env.ANTHROPIC_BASE_URL = http://localhost:1986` + `env.ANTHROPIC_API_KEY = <local key>`
+   - *OpenCode*: a `provider.abproxy` entry in OpenCode's own shape — `npm: "@ai-sdk/openai-compatible"`, `options.baseURL` = `http://localhost:1986/v1`, `options.apiKey` = `<local key>` — plus a `models` map with your aliases and `default` (captured at wrap time; **Re-apply** after adding aliases). Both `opencode.json` and `opencode.jsonc` are detected.
+   - *Codex*: a `[model_providers.abproxy]` section in Codex's own schema — `name`, `wire_api = "responses"`, `base_url = http://localhost:1986/v1`, auth via `experimental_bearer_token` (the local key — no shell env var needed) — plus `model_provider = "abproxy"` and `model = <alias or "default">`. Current Codex only speaks the Responses API, which abproxy serves at `POST /v1/responses` (translated to the chat/Anthropic pipeline with tool calls intact). Previous values are preserved in the backup.
+
+### Tracking wrapper state
+
+The setup menu (and banner) shows live status per agent:
+
+- `● wrapper running` — the agent's config points at abproxy **and** the server is up
+- `○ wrapper set — server stopped` — config is patched but the abproxy server isn't running
+- `not configured` — agent installed, not wrapped
+
+For an already-wrapped agent the menu offers **Stop wrapper** (restore original config from the backup and delete it), **Re-apply** (re-patch after a port/key change), and **Details**. The same is available from the shell via `abproxy setup restore [agent|all]`.
+
+Wrapper state is stored in `~/.abproxy/wrappers.json`, but the agent's config **content is the source of truth** — so the status is still correct even if that file is deleted, and wrapping is idempotent.
+
+### Uninstalling / cleanup
+
+**Before deleting abproxy**, stop all wrappers so agents keep working with their original settings:
+
+```bash
+abproxy setup restore all    # or: /setup → each agent → Stop wrapper
+```
+
+If you already deleted the app without restoring:
+
+- An agent config may still point at the dead `localhost:1986` endpoint. To fix manually, delete the patched config file and rename its `<name>.abproxy.bak` back to the original name.
+- Or simply **reinstall abproxy** — startup detects leftover `.abproxy.bak` files, warns on the banner, and offers restore (`/setup` → agent → Stop wrapper, or `abproxy setup restore all`).
+- `~/.abproxy/` holds config, logs, and wrapper state and survives app removal; delete it last, after restoring agent configs.
+
+## Agent Configuration (manual)
 
 ```bash
 abproxy setup claude-code   # or opencode / codex
@@ -129,6 +202,7 @@ abproxy logs [-f]
 | `GET /v1/models` | **Alias names + `default`** — nothing else |
 | `GET /v1/models/:id` | Alias lookup (`:id` = alias name or `default`) |
 | `POST /v1/chat/completions` | OpenAI-compatible completions |
+| `POST /v1/responses` | OpenAI **Responses API** (Codex CLI) — translated to the chat pipeline |
 | `POST /v1/messages` | Anthropic-native messages |
 
 All endpoints (except `/health`) accept `Authorization: Bearer <localApiKey>` or `x-api-key: <localApiKey>`.

@@ -1,0 +1,34 @@
+{
+  "providers": [
+    {
+      "name": "TabiToken",
+      "url": "https://tabitoken.com",
+      "baseUrl": "https://tabitoken.com/v1",
+      "protocols": ["openai"]
+    },
+    {
+      "name": "GoRouter",
+      "url": "https://gorouter.app",
+      "baseUrl": "https://gorouter.app/v1",
+      "protocols": ["openai"]
+    },
+    {
+      "name": "SeekAI",
+      "url": "https://seekai.cc",
+      "baseUrl": "https://seekai.cc/v1",
+      "protocols": ["openai"]
+    },
+    {
+      "name": "justwoker",
+      "url": "https://api.justwoker.icu",
+      "baseUrl": "https://api.justwoker.icu/v1",
+      "protocols": ["openai"]
+    },
+    {
+      "name": "TokenRouter",
+      "url": "https://api.tokenrouter.com/v1",
+      "baseUrl": "https://api.tokenrouter.com/v1",
+      "protocols": ["openai"]
+    }
+  ]
+}

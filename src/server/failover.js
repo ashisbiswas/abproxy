@@ -16,6 +16,14 @@ import {
   buildUpstreamUrl,
   getSupportedProtocols,
 } from './adapters.js';
+import {
+  responsesToOpenaiRequest,
+  responsesToAnthropicRequest,
+  openaiToResponsesResponse,
+  anthropicToResponsesResponse,
+  openaiStreamToResponses,
+  anthropicStreamToResponses,
+} from './responses-adapter.js';
 import { getActiveApiKey, getActiveAccountName } from '../config/manager.js';
 import { logger } from '../utils/logger.js';
 
@@ -147,7 +155,11 @@ async function forwardRequest({ target, body, clientFormat, requestModel, isStre
   // Adapt request body if needed
   let upstreamBody;
   if (needsRequestAdapt) {
-    if (clientFormat === 'openai' && providerFormat === 'anthropic') {
+    if (clientFormat === 'responses') {
+      upstreamBody = providerFormat === 'anthropic'
+        ? responsesToAnthropicRequest(body, target.realModel)
+        : responsesToOpenaiRequest(body, target.realModel);
+    } else if (clientFormat === 'openai' && providerFormat === 'anthropic') {
       upstreamBody = openaiToAnthropicRequest(body, target.realModel);
     } else {
       upstreamBody = anthropicToOpenaiRequest(body, target.realModel);
@@ -205,7 +217,11 @@ async function forwardRequest({ target, body, clientFormat, requestModel, isStre
       if (needsResponseAdapt) {
         // Pipe through transform stream
         let transformStream;
-        if (providerFormat === 'anthropic' && clientFormat === 'openai') {
+        if (clientFormat === 'responses') {
+          transformStream = providerFormat === 'anthropic'
+            ? anthropicStreamToResponses(requestModel)
+            : openaiStreamToResponses(requestModel);
+        } else if (providerFormat === 'anthropic' && clientFormat === 'openai') {
           transformStream = anthropicStreamToOpenai(requestModel);
         } else {
           transformStream = openaiStreamToAnthropic(requestModel);
@@ -260,6 +276,11 @@ async function forwardRequest({ target, body, clientFormat, requestModel, isStre
     const needsResponseAdapt = clientFormat !== providerFormat;
 
     if (needsResponseAdapt) {
+      if (clientFormat === 'responses') {
+        return providerFormat === 'anthropic'
+          ? anthropicToResponsesResponse(responseBody, requestModel)
+          : openaiToResponsesResponse(responseBody, requestModel);
+      }
       if (providerFormat === 'anthropic' && clientFormat === 'openai') {
         return anthropicToOpenaiResponse(responseBody, requestModel);
       } else {

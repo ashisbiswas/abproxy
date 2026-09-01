@@ -93,6 +93,9 @@ export function createRouter() {
   // OpenAI-compatible: chat completions
   router.post('/v1/chat/completions', handleProxyRequest);
 
+  // OpenAI Responses API (Codex CLI) — translated to the chat pipeline
+  router.post('/v1/responses', handleProxyRequest);
+
   // Anthropic-native: messages
   router.post('/v1/messages', handleProxyRequest);
 

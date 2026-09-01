@@ -135,7 +135,8 @@ export const commands = [
   { name: '/providers', desc: 'Manage providers (list/add/edit/delete/test/sync/accounts)', handler: showProviderMenu },
   { name: '/models',    desc: 'Manage models (list/add/delete/alias/default/test)',         handler: showModelMenu },
   { name: '/aliases',   desc: 'Manage aliases — the model names agents see',               handler: showAliasMenu },
-  { name: '/setup',     desc: 'Configure an agent (claude-code|opencode|codex)',            handler: cmdSetup },
+  { name: '/setup',     desc: 'Wrap an agent in abproxy (auto-detects installed: claude-code, opencode, codex)', handler: cmdSetup },
+  { name: '/free',      desc: 'Curated list of free provider endpoints',                  handler: cmdFree },
   { name: '/status',    desc: 'Server state and health',                                    handler: cmdStatus },
   { name: '/config',    desc: 'Show config file path and local API key',                    handler: cmdConfig },
   { name: '/help',      desc: 'Full command reference',                                     handler: cmdHelp },
@@ -177,7 +178,8 @@ export async function showMainMenu() {
           { name: `${chalk.cyan('Providers'.padEnd(12))} ${chalk.gray('Add, edit, test providers & accounts')}`, value: 'providers' },
           { name: `${chalk.cyan('Models'.padEnd(12))} ${chalk.gray('Add, delete, alias, test models')}`,        value: 'models' },
           { name: `${chalk.cyan('Aliases'.padEnd(12))} ${chalk.gray('The model names agents see at /v1/models')}`, value: 'aliases' },
-          { name: `${chalk.cyan('Setup'.padEnd(12))} ${chalk.gray('Configure Claude Code / opencode / codex')}`, value: 'setup' },
+          { name: `${chalk.cyan('Setup'.padEnd(12))} ${chalk.gray('Wrap detected agents — Claude Code, OpenCode, Codex')}`, value: 'setup' },
+          { name: `${chalk.cyan('Free Providers'.padEnd(12))} ${chalk.gray('Curated free provider URLs, add one fast')}`, value: 'free' },
           { name: `${chalk.cyan('Config'.padEnd(12))} ${chalk.gray('Config path and local API key')}`,          value: 'config' },
           { name: `${chalk.cyan('Help'.padEnd(12))} ${chalk.gray('Full command reference')}`,                   value: 'help' },
           { name: `${chalk.cyan('Exit'.padEnd(12))} ${chalk.gray('Quit abproxy')}`,                             value: 'exit' },
@@ -197,6 +199,7 @@ export async function showMainMenu() {
       case 'models':    await showModelMenu(); break;
       case 'aliases':   await showAliasMenu(); break;
       case 'setup':     await cmdSetup(''); break;
+      case 'free':      await cmdFree(); break;
       case 'config':    await cmdConfig(); break;
       case 'help':      cmdHelp(); break;
       case 'exit':      return cmdExit();
@@ -1068,37 +1071,34 @@ async function cmdAliasDelete() {
 }
 
 
-// ─── Setup / Status / Config / Help ──────────────────────────────────
+// ─── Setup / Free / Status / Config / Help ──────────────────────────
+
+async function cmdFree() {
+  return guard(async () => {
+    const { freeProvidersMenu } = await import('../cli/free-providers.js');
+    await freeProvidersMenu();
+  });
+}
 
 async function cmdSetup(args) {
   return guard(async () => {
-    const { registerSetupCommands } = await import('../cli/setup.js');
-    const { Command } = await import('commander');
-    const tmpProgram = new Command();
-    registerSetupCommands(tmpProgram);
+    const { runSetupMenu, runRestoreMenu, wrapAgentAndReport, listAgentIds } = await import('../agents/interactive.js');
 
-    let tool = args;
-    if (!tool) {
-      tool = await select({
-        message: 'Select agent to configure:',
-        choices: [
-          { name: 'Claude Code', value: 'claude-code' },
-          { name: 'opencode', value: 'opencode' },
-          { name: 'codex', value: 'codex' },
-          backChoice,
-        ],
-        loop: false,
-      });
-      if (tool === BACK) return;
+    const arg = (args || '').trim();
+    if (!arg) {
+      await runSetupMenu();
+      return;
     }
 
-    const setupCmd = tmpProgram.commands.find(c => c.name() === 'setup');
-    const subCmd = setupCmd?.commands.find(c => c.name() === tool);
-    if (subCmd) {
-      await subCmd.parseAsync([], { from: 'user' });
-    } else {
-      console.error(chalk.red(`  Unknown agent: "${tool}"`));
+    // /setup restore [agent|all] — stop wrappers, restore originals
+    if (arg === 'restore' || arg.startsWith('restore ')) {
+      const target = arg.slice('restore'.length).trim() || null;
+      await runRestoreMenu(target);
+      return;
     }
+
+    // /setup <agent> — wrap a specific agent directly
+    await wrapAgentAndReport(arg.replace(/^\//, ''));
   });
 }
 
@@ -1202,10 +1202,25 @@ function cmdHelp() {
   item('abproxy status', 'Daemon status + health');
   item('abproxy logs [-f]', 'View or follow logs');
 
+  section('Free providers');
+  item('/free', 'Numbered list of curated free provider URLs');
+  item('Add as provider', '/free → y → number — pre-fills name/URL/protocols');
+
   section('Agent setup (shell)');
-  item('abproxy setup claude-code', 'Point Claude Code at abproxy');
-  item('abproxy setup opencode', 'Point opencode at abproxy');
-  item('abproxy setup codex', 'Point codex at abproxy');
+  item('abproxy setup', 'Interactive — lists only detected agents');
+  item('abproxy setup list', 'Agents table: detection, wrapper status, paths');
+  item('abproxy setup claude-code', 'Wrap Claude Code (backup + point at abproxy)');
+  item('abproxy setup opencode', 'Wrap opencode (backup + point at abproxy)');
+  item('abproxy setup codex', 'Wrap codex (backup + point at abproxy)');
+  item('abproxy setup restore [agent|all]', 'Stop wrapper(s), restore original config(s)');
+
+  section('Agent wrappers');
+  item('Wrap', 'Backs up config as <config>.abproxy.bak, then patches it');
+  item('● wrapper running', "Config points at abproxy AND the server is up");
+  item('○ wrapper set', 'Config points at abproxy but the server is stopped');
+  item('Stop wrapper', "Setup → agent → 'Stop wrapper' restores the backup");
+  item('Re-apply', 'Update the patched URL/key (e.g. after a port change)');
+  item('App deleted?', 'Reinstall — leftover .abproxy.bak files are detected and restorable');
 
   section('Keyboard');
   item('/', 'Open the menu');

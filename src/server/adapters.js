@@ -320,6 +320,7 @@ function mapFinishReason(openaiReason) {
  */
 export function getRequestFormat(requestPath) {
   if (requestPath.includes('/v1/messages')) return 'anthropic';
+  if (requestPath.includes('/v1/responses')) return 'responses';
   if (requestPath.includes('/v1/chat/completions')) return 'openai';
   return 'openai'; // default
 }
