@@ -2,33 +2,46 @@
   "providers": [
     {
       "name": "TabiToken",
-      "url": "https://tabitoken.com",
+      "url": "https://tabitoken.com/sign-up?aff=rC0d",
       "baseUrl": "https://tabitoken.com/v1",
       "protocols": ["openai"]
     },
     {
       "name": "GoRouter",
-      "url": "https://gorouter.app",
+      "url": "https://gorouter.app/sign-up?aff=qPZk",
       "baseUrl": "https://gorouter.app/v1",
       "protocols": ["openai"]
     },
     {
       "name": "SeekAI",
-      "url": "https://seekai.cc",
+      "url": "https://seekai.cc/sign-up?aff=bpDQ",
       "baseUrl": "https://seekai.cc/v1",
       "protocols": ["openai"]
     },
     {
-      "name": "justwoker",
-      "url": "https://api.justwoker.icu",
+      "name": "JustDoWoker",
+      "url": "https://api.justwoker.icu/register?aff=0ZtN",
       "baseUrl": "https://api.justwoker.icu/v1",
       "protocols": ["openai"]
     },
     {
       "name": "TokenRouter",
-      "url": "https://api.tokenrouter.com/v1",
+      "url": "https://api.tokenrouter.com",
       "baseUrl": "https://api.tokenrouter.com/v1",
       "protocols": ["openai"]
+    },
+	{
+      "name": "Bluesmind",
+      "url": "https://api.bluesminds.com/sign-up?aff=qwbc",
+      "baseUrl": "https://api.bluesminds.com/v1",
+      "protocols": ["openai"]
+    },
+	{
+      "name": "KKToken",
+      "url": "https://kktoken.cc/sign-up?aff=AgMj",
+      "baseUrl": "https://kktoken.cc/v1",
+      "protocols": ["openai"]
     }
+	
   ]
 }
